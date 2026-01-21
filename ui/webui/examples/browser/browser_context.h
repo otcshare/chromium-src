@@ -11,10 +11,6 @@
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 
-namespace content {
-class ResourceContext;
-}
-
 namespace webui_examples {
 
 class BrowserContext : public content::BrowserContext {
@@ -28,9 +24,8 @@ class BrowserContext : public content::BrowserContext {
   // content::BrowserContext:
   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
       const base::FilePath& partition_path) override;
-  base::FilePath GetPath() override;
+  base::FilePath GetPath() const override;
   bool IsOffTheRecord() override;
-  content::ResourceContext* GetResourceContext() override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
   content::BrowserPluginGuestManager* GetGuestManager() override;
   storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
@@ -51,7 +46,6 @@ class BrowserContext : public content::BrowserContext {
       override;
 
   const base::FilePath temp_dir_path_;
-  std::unique_ptr<content::ResourceContext> resource_context_;
 };
 
 }  // namespace webui_examples

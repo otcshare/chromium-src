@@ -10,16 +10,17 @@
 #include <string>
 #include <vector>
 
-#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "components/component_updater/component_installer.h"
 #include "components/crx_file/crx_verifier.h"
-#include "components/update_client/component_unpacker.h"
+#include "components/update_client/unpacker.h"
 #include "components/update_client/update_client.h"
 
 namespace base {
@@ -59,6 +60,11 @@ namespace component_updater {
 class RecoveryComponentActionHandler : public update_client::ActionHandler {
  public:
   static scoped_refptr<update_client::ActionHandler> MakeActionHandler();
+
+  RecoveryComponentActionHandler(const RecoveryComponentActionHandler&) =
+      delete;
+  RecoveryComponentActionHandler& operator=(
+      const RecoveryComponentActionHandler&) = delete;
 
   // Overrides for update_client::RecoveryComponentActionHandler. |action| is an
   // absolute file path to a CRX to be unpacked. |session_id| contains the
@@ -105,12 +111,17 @@ class RecoveryComponentActionHandler : public update_client::ActionHandler {
 
   virtual base::CommandLine MakeCommandLine(
       const base::FilePath& unpack_path) const = 0;
+  virtual void PrepareFiles(const base::FilePath& unpack_path) const = 0;
   virtual void Elevate(Callback callback) = 0;
 
   void Unpack();
-  void UnpackComplete(const update_client::ComponentUnpacker::Result& result);
+  void UnpackComplete(const update_client::Unpacker::Result& result);
   void RunCommand(const base::CommandLine& cmdline);
-  void WaitForCommand(base::Process process);
+
+  // `process` contains the process object, if the process was successfully
+  // created or an error value otherwise (if the error is available on that
+  // platform).
+  void WaitForCommand(base::expected<base::Process, int> process_or_error);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -133,11 +144,6 @@ class RecoveryComponentActionHandler : public update_client::ActionHandler {
 
   // Contains the path where the action CRX is unpacked in the per-user case.
   base::FilePath unpack_path_;
-
-  RecoveryComponentActionHandler(const RecoveryComponentActionHandler&) =
-      delete;
-  RecoveryComponentActionHandler& operator=(
-      const RecoveryComponentActionHandler&) = delete;
 };
 
 class ComponentUpdateService;
@@ -146,7 +152,10 @@ class RecoveryImprovedInstallerPolicy : public ComponentInstallerPolicy {
  public:
   explicit RecoveryImprovedInstallerPolicy(PrefService* prefs)
       : prefs_(prefs) {}
-  ~RecoveryImprovedInstallerPolicy() override = default;
+  RecoveryImprovedInstallerPolicy(const RecoveryImprovedInstallerPolicy&) =
+      delete;
+  RecoveryImprovedInstallerPolicy& operator=(
+      const RecoveryImprovedInstallerPolicy&) = delete;
 
  private:
   friend class RecoveryImprovedInstallerTest;
@@ -169,11 +178,6 @@ class RecoveryImprovedInstallerPolicy : public ComponentInstallerPolicy {
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 
   raw_ptr<PrefService> prefs_;
-
-  RecoveryImprovedInstallerPolicy(const RecoveryImprovedInstallerPolicy&) =
-      delete;
-  RecoveryImprovedInstallerPolicy& operator=(
-      const RecoveryImprovedInstallerPolicy&) = delete;
 };
 
 void RegisterRecoveryImprovedComponent(ComponentUpdateService* cus,

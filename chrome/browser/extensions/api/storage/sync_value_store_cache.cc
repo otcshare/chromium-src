@@ -8,15 +8,19 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/extensions/api/storage/sync_storage_backend.h"
 #include "chrome/browser/sync/glue/sync_start_util.h"
 #include "components/value_store/value_store_factory.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/api/storage/backend_task_runner.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/storage.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 
@@ -65,7 +69,7 @@ base::WeakPtr<SyncValueStoreCache> SyncValueStoreCache::AsWeakPtr() {
 }
 
 syncer::SyncableService* SyncValueStoreCache::GetSyncableService(
-    syncer::ModelType type) {
+    syncer::DataType type) {
   DCHECK(IsOnBackendSequence());
   DCHECK(initialized_);
 
@@ -76,7 +80,6 @@ syncer::SyncableService* SyncValueStoreCache::GetSyncableService(
       return extension_backend_.get();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -90,7 +93,7 @@ void SyncValueStoreCache::RunWithValueStoreForExtension(
   std::move(callback).Run(backend->GetStorage(extension->id()));
 }
 
-void SyncValueStoreCache::DeleteStorageSoon(const std::string& extension_id) {
+void SyncValueStoreCache::DeleteStorageSoon(const ExtensionId& extension_id) {
   DCHECK(IsOnBackendSequence());
   app_backend_->DeleteStorage(extension_id);
   extension_backend_->DeleteStorage(extension_id);

@@ -1,9 +1,13 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {TestRunner} from 'test_runner';
+import {AxeCoreTestRunner} from 'axe_core_test_runner';
+
+import * as Application from 'devtools/panels/application/application.js';
+
 (async function() {
-  await TestRunner.loadTestModule('axe_core_test_runner');
 
   TestRunner.addResult('Tests accessibility of AppManifestView on application panel.');
   const manifest = `{
@@ -20,10 +24,16 @@
       "type": "image/png"
     }]
   }`;
+  const appManifest = {url: 'test_manifest', data: manifest, errors: []};
 
+  const originalFetchAppManifest =
+      TestRunner.resourceTreeModel.fetchAppManifest;
+  TestRunner.resourceTreeModel.fetchAppManifest = () =>
+      Promise.resolve(appManifest);
   await TestRunner.showPanel('resources');
-  const manifestView = UI.panels.resources.visibleView;
-  await manifestView.renderManifest('test_manifest', manifest, [], []);
+  const manifestView = Application.ResourcesPanel.ResourcesPanel.instance().visibleView;
+  await manifestView.performUpdate();
   await AxeCoreTestRunner.runValidation(manifestView.contentElement);
+  TestRunner.resourceTreeModel.fetchAppManifest = originalFetchAppManifest;
   TestRunner.completeTest();
 })();

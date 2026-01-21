@@ -7,29 +7,34 @@
  * 'chooser-exception-list' shows a list of chooser exceptions for a given
  * chooser type.
  */
+import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-import 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
+import 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import '../settings_shared.css.js';
 import '../i18n_setup.js';
 import './chooser_exception_list_entry.js';
 
+import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
+import type {CrTooltipElement} from 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {ListPropertyUpdateMixin} from 'chrome://resources/cr_elements/list_property_update_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
-import {PaperTooltipElement} from 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {TooltipMixin} from '../tooltip_mixin.js';
 
 import {getTemplate} from './chooser_exception_list.html.js';
-import {ChooserType, ContentSettingsTypes} from './constants.js';
+import type {ContentSettingsTypes} from './constants.js';
+import {ChooserType} from './constants.js';
+import type {ChooserException, RawChooserException, SiteException} from './site_settings_browser_proxy.js';
 import {SiteSettingsMixin} from './site_settings_mixin.js';
-import {ChooserException, RawChooserException, SiteException} from './site_settings_prefs_browser_proxy.js';
 
 export interface ChooserExceptionListElement {
   $: {
-    tooltip: PaperTooltipElement,
+    confirmResetSettings: CrDialogElement,
+    tooltip: CrTooltipElement,
   };
 }
 
@@ -75,15 +80,22 @@ export class ChooserExceptionListElement extends
       },
 
       hasIncognito_: Boolean,
+
+      resetPermissionsMessage_: {
+        type: String,
+        value: '',
+      },
+
       tooltipText_: String,
     };
   }
 
-  chooserExceptions: ChooserException[];
-  chooserType: ChooserType;
-  private emptyListMessage_: string;
-  private hasIncognito_: boolean;
-  private tooltipText_: string;
+  declare chooserExceptions: ChooserException[];
+  declare chooserType: ChooserType;
+  declare private emptyListMessage_: string;
+  declare private hasIncognito_: boolean;
+  declare private resetPermissionsMessage_: string;
+  declare private tooltipText_: string;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -137,18 +149,32 @@ export class ChooserExceptionListElement extends
     switch (this.chooserType) {
       case ChooserType.USB_DEVICES:
         this.emptyListMessage_ = this.i18n('noUsbDevicesFound');
+        this.resetPermissionsMessage_ = this.i18n('resetUsbConfirmation');
         break;
       case ChooserType.SERIAL_PORTS:
         this.emptyListMessage_ = this.i18n('noSerialPortsFound');
+        this.resetPermissionsMessage_ =
+            this.i18n('resetSerialPortsConfirmation');
         break;
       case ChooserType.HID_DEVICES:
         this.emptyListMessage_ = this.i18n('noHidDevicesFound');
+        this.resetPermissionsMessage_ = this.i18n('resetHidConfirmation');
         break;
       case ChooserType.BLUETOOTH_DEVICES:
         this.emptyListMessage_ = this.i18n('noBluetoothDevicesFound');
+        this.resetPermissionsMessage_ = this.i18n('resetBluetoothConfirmation');
         break;
+      // <if expr="is_chromeos">
+      case ChooserType.SMART_CARD_READERS_DEVICES:
+        this.emptyListMessage_ =
+            this.i18n('siteSettingsNoSmartCardReadersFound');
+        this.resetPermissionsMessage_ =
+            this.i18n('siteSettingsResetSmartCardConfirmation');
+        break;
+      // </if>
       default:
         this.emptyListMessage_ = '';
+        this.resetPermissionsMessage_ = '';
     }
 
     this.populateList_();
@@ -167,8 +193,8 @@ export class ChooserExceptionListElement extends
    */
   private onShowTooltip_(e: CustomEvent<{target: HTMLElement, text: string}>) {
     this.tooltipText_ = e.detail.text;
-    // paper-tooltip normally determines the target from the |for| property,
-    // which is a selector. Here paper-tooltip is being reused by multiple
+    // cr-tooltip normally determines the target from the |for| property,
+    // which is a selector. Here cr-tooltip is being reused by multiple
     // potential targets.
     this.showTooltipAtTarget(this.$.tooltip, e.detail.target);
   }
@@ -203,6 +229,32 @@ export class ChooserExceptionListElement extends
         this.updateList(propertyPath, siteUidGetter, exception.sites);
       }, this);
     }
+  }
+
+  /**
+   * Confirms the resetting of all content settings for an origin.
+   */
+  private onConfirmClearSettings_(e: Event) {
+    e.preventDefault();
+    this.$.confirmResetSettings.showModal();
+  }
+
+  private onCloseDialog_(e: Event) {
+    (e.target as HTMLElement).closest('cr-dialog')!.close();
+  }
+
+  /**
+   * Resets all permissions for the current origin.
+   */
+  private onResetSettings_(e: Event) {
+    this.chooserExceptions.forEach(exception => {
+      exception.sites.forEach(site => {
+        this.browserProxy.resetChooserExceptionForSite(
+            exception.chooserType, site.origin, exception.object);
+      });
+    });
+
+    this.onCloseDialog_(e);
   }
 }
 

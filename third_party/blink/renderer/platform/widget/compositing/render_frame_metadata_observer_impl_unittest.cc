@@ -16,6 +16,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 namespace {
@@ -47,7 +48,7 @@ class MockRenderFrameMetadataObserverClient
                void(uint32_t frame_token,
                     const cc::RenderFrameMetadata& metadata));
   MOCK_METHOD1(OnFrameSubmissionForTesting, void(uint32_t frame_token));
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   MOCK_METHOD1(OnRootScrollOffsetChanged, void(const gfx::PointF& offset));
 #endif
 
@@ -128,10 +129,11 @@ TEST_F(RenderFrameMetadataObserverImplTest, ShouldSendFrameToken) {
   }
 }
 
-// This test verifies that a frame token is not requested from viz when
-// the root scroll offset changes on Android.
-#if BUILDFLAG(IS_ANDROID)
-TEST_F(RenderFrameMetadataObserverImplTest, ShouldSendFrameTokenOnAndroid) {
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+// This test verifies that a frame token is not requested from viz when the root
+// scroll offset changes.
+TEST_F(RenderFrameMetadataObserverImplTest,
+       ShouldNotSendFrameTokenOnRootScrollOffsetUpdate) {
   viz::CompositorFrameMetadata compositor_frame_metadata;
   compositor_frame_metadata.send_frame_token_to_embedder = false;
   compositor_frame_metadata.frame_token = 1337;
@@ -159,7 +161,7 @@ TEST_F(RenderFrameMetadataObserverImplTest, ShouldSendFrameTokenOnAndroid) {
   observer_impl().OnRenderFrameSubmission(render_frame_metadata,
                                           &compositor_frame_metadata,
                                           false /* force_send */);
-  // Android does not need a corresponding frame token.
+  // Embedder does not need a corresponding frame token.
   EXPECT_FALSE(compositor_frame_metadata.send_frame_token_to_embedder);
   {
     base::RunLoop run_loop;
@@ -215,9 +217,10 @@ TEST_F(RenderFrameMetadataObserverImplTest, SendRootScrollsForAccessibility) {
     run_loop.Run();
   }
 
-  // Enable reporting for root scroll changes. This will generate one
-  // notification.
-  observer_impl().ReportAllRootScrolls(true);
+  // Enable reporting for root scroll changes on every frame. This will generate
+  // one notification.
+  observer_impl().UpdateRootScrollOffsetUpdateFrequency(
+      cc::mojom::RootScrollOffsetUpdateFrequency::kAllUpdates);
   {
     base::RunLoop run_loop;
     EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
@@ -254,7 +257,200 @@ TEST_F(RenderFrameMetadataObserverImplTest, SendRootScrollsForAccessibility) {
     run_loop.Run();
   }
 }
-#endif
+
+// This test verifies that we don't get notifications for the root scroll
+// offsets by default.
+TEST_F(RenderFrameMetadataObserverImplTest,
+       DoNotSendRootScrollOffsetByDefault) {
+  const uint32_t expected_frame_token = 1337;
+  viz::CompositorFrameMetadata compositor_frame_metadata;
+  compositor_frame_metadata.send_frame_token_to_embedder = false;
+  compositor_frame_metadata.frame_token = expected_frame_token;
+  cc::RenderFrameMetadata render_frame_metadata;
+
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Submit with a root scroll change 3 times. We shouldn't get a notification.
+  render_frame_metadata.root_scroll_offset = gfx::PointF(0.0f, 100.0f);
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  render_frame_metadata.root_scroll_offset->set_y(200.0f);
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  render_frame_metadata.root_scroll_offset->set_y(300.0f);
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                     render_frame_metadata))
+      .Times(0);
+}
+
+// This test verifies that we don't get an extra `OnRootScrollOffsetChanged()`
+// when we would already get an `OnRenderFrameMetadataChanged()` notification.
+TEST_F(RenderFrameMetadataObserverImplTest, DoNotSendExtraRootScrollOffset) {
+  const uint32_t expected_frame_token = 1337;
+  viz::CompositorFrameMetadata compositor_frame_metadata;
+  compositor_frame_metadata.send_frame_token_to_embedder = false;
+  compositor_frame_metadata.frame_token = expected_frame_token;
+  cc::RenderFrameMetadata render_frame_metadata;
+
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Enable reporting for root scroll changes on every frame. This will generate
+  // one notification.
+  observer_impl().UpdateRootScrollOffsetUpdateFrequency(
+      cc::mojom::RootScrollOffsetUpdateFrequency::kAllUpdates);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Send a single root scroll change with `is_scroll_offset_at_top`, which
+  // should already trigger an `OnRenderFrameMetadataChanged()` and shouldn't
+  // send an `OnRootScrollOffsetChanged()`.
+  render_frame_metadata.root_scroll_offset = gfx::PointF(0.0f, 200.0f);
+  render_frame_metadata.is_scroll_offset_at_top =
+      !render_frame_metadata.is_scroll_offset_at_top;
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  EXPECT_CALL(client(), OnRootScrollOffsetChanged(
+                            *(render_frame_metadata.root_scroll_offset)))
+      .Times(0);
+}
+
+// This test verifies that we get an `OnRootScrollOffsetChanged()` when we call
+// `DidEndScroll()`.
+TEST_F(RenderFrameMetadataObserverImplTest, SendRootScrollOffsetOnScrollEnd) {
+  ScopedCCTNewRFMPushBehaviorForTest feature(true);
+  const uint32_t expected_frame_token = 1337;
+  viz::CompositorFrameMetadata compositor_frame_metadata;
+  compositor_frame_metadata.send_frame_token_to_embedder = false;
+  compositor_frame_metadata.frame_token = expected_frame_token;
+  cc::RenderFrameMetadata render_frame_metadata;
+
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Enable reporting for root scroll changes on scroll-end. This will generate
+  // a notification.
+  observer_impl().UpdateRootScrollOffsetUpdateFrequency(
+      cc::mojom::RootScrollOffsetUpdateFrequency::kOnScrollEnd);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Submit with a root scroll change a couple times. This shouldn't generate a
+  // notification.
+  render_frame_metadata.root_scroll_offset = gfx::PointF(0.0f, 100.0f);
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  render_frame_metadata.root_scroll_offset->set_y(200.0f);
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                     render_frame_metadata))
+      .Times(0);
+  EXPECT_CALL(client(), OnRootScrollOffsetChanged(
+                            *(render_frame_metadata.root_scroll_offset)))
+      .Times(0);
+
+  // Now, simulate a ScrollEnd. This should send the latest root scroll offset.
+  observer_impl().DidEndScroll();
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRootScrollOffsetChanged(
+                              *(render_frame_metadata.root_scroll_offset)))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+}
+
+// This test verifies that we get an `OnRenderFrameMetadataChanged()` when we
+// update the update frequency.
+TEST_F(RenderFrameMetadataObserverImplTest,
+       SendRenderFrameMetadataOnUpdateFrequency) {
+  ScopedCCTNewRFMPushBehaviorForTest feature(true);
+  const uint32_t expected_frame_token = 1337;
+  viz::CompositorFrameMetadata compositor_frame_metadata;
+  compositor_frame_metadata.send_frame_token_to_embedder = false;
+  compositor_frame_metadata.frame_token = expected_frame_token;
+  cc::RenderFrameMetadata render_frame_metadata;
+
+  observer_impl().OnRenderFrameSubmission(render_frame_metadata,
+                                          &compositor_frame_metadata,
+                                          false /* force_send */);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Update frequency to kNone. This should send a notification since the
+  // frequency was empty before.
+  observer_impl().UpdateRootScrollOffsetUpdateFrequency(
+      cc::mojom::RootScrollOffsetUpdateFrequency::kNone);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+
+  // Update frequency to on scroll-end. This should send a notification since
+  // the frequency increased.
+  observer_impl().UpdateRootScrollOffsetUpdateFrequency(
+      cc::mojom::RootScrollOffsetUpdateFrequency::kOnScrollEnd);
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(client(), OnRenderFrameMetadataChanged(expected_frame_token,
+                                                       render_frame_metadata))
+        .WillOnce(InvokeClosure(run_loop.QuitClosure()));
+    run_loop.Run();
+  }
+}
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
 // This test verifies that a request to force send metadata is respected.
 TEST_F(RenderFrameMetadataObserverImplTest, ForceSendMetadata) {

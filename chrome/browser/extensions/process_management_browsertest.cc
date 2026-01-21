@@ -10,21 +10,20 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/site_instance.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -51,23 +50,23 @@ namespace {
 class ProcessManagementTest : public ExtensionBrowserTest {
  public:
   ProcessManagementTest() {
-    // TODO(https://crbug.com/1110891): Remove this once Extensions are
+    // TODO(crbug.com/40142347): Remove this once Extensions are
     // supported with BackForwardCache.
-    disabled_feature_list_.InitWithFeatures({}, {features::kBackForwardCache});
+    disabled_feature_list_.InitWithFeatures(
+        {}, {features::kBackForwardCache,
+             features::kProcessPerSiteUpToMainFrameThreshold});
   }
 
  private:
-  // This is needed for testing isolated apps, which are still experimental.
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionBrowserTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(
-        extensions::switches::kEnableExperimentalExtensionApis);
-  }
-
   void SetUpOnMainThread() override {
     ExtensionBrowserTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
   }
+
+  // TODO(https://crbug.com/423465927): Explore a better approach to make the
+  // existing tests run with the prewarm feature enabled.
+  test::ScopedPrewarmFeatureList scoped_prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
 
   base::test::ScopedFeatureList disabled_feature_list_;
 };
@@ -165,17 +164,16 @@ class ChromeWebStoreInIsolatedOriginTest : public ChromeWebStoreProcessTest {
 
 }  // namespace
 
-// Ensure that an isolated app never shares a process with WebUIs, non-isolated
-// extensions, and normal webpages.  None of these should ever comingle
-// RenderProcessHosts even if we hit the process limit.
+// Ensure that hosted apps, extensions, normal web sites, and WebUI never share
+// a process with each other, even if we hit the process limit.
+// Note: All web and hosted app URLs in this test are same-site, so Site
+// Isolation is not directly involved.
 IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ProcessOverflow) {
   // Set max renderers to 1 to force running out of processes.
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("isolated_apps/app1")));
-  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("isolated_apps/app2")));
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("hosted_app")));
   ASSERT_TRUE(
       LoadExtension(test_data_dir_.AppendASCII("api_test/app_process")));
@@ -195,226 +193,100 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ProcessOverflow) {
   GURL extension1_url = extension1->url();
 
   // Create multiple tabs for each type of renderer that might exist.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), base_url.Resolve("isolated_apps/app1/main.html")));
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), base_url.Resolve("hosted_app/main.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), base_url.Resolve("test_file.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  // Tab 0: NTP 1.
+  ASSERT_TRUE(
+      NavigateToURL(GetActiveWebContents(), GURL(chrome::kChromeUINewTabURL)));
+  // Tab 1: Hosted app 1.
+  NavigateToURLInNewTab(base_url.Resolve("hosted_app/main.html"));
+  // Tab 2: Web page 1.
+  NavigateToURLInNewTab(base_url.Resolve("test_file.html"));
+  // Tab 3: NTP 2.
+  NavigateToURLInNewTab(GURL(chrome::kChromeUINewTabURL));
+  // Tab 4: Hosted app 2.
+  NavigateToURLInNewTab(
+      base_url.Resolve("api_test/app_process/path1/empty.html"));
+  // Tab 5: Web page 2.
+  NavigateToURLInNewTab(base_url.Resolve("test_file_with_body.html"));
+  // Tab 6: Second instance of Hosted app 1.
+  NavigateToURLInNewTab(base_url.Resolve("hosted_app/main.html"));
 
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), base_url.Resolve("isolated_apps/app2/main.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), base_url.Resolve("api_test/app_process/path1/empty.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), base_url.Resolve("test_file_with_body.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-
-  // Load another copy of isolated app 1.
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), base_url.Resolve("isolated_apps/app1/main.html"),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-
-  // Load another extension.
+  // Load another extension (in background).
   const extensions::Extension* extension2 = LoadExtension(
       test_data_dir_.AppendASCII("api_test/browser_action/close_background"));
   ASSERT_TRUE(extension2);
   GURL extension2_url = extension2->url();
 
   // Get tab processes.
-  ASSERT_EQ(9, browser()->tab_strip_model()->count());
-  content::RenderProcessHost* isolated1_host = browser()
-                                                   ->tab_strip_model()
-                                                   ->GetWebContentsAt(0)
-                                                   ->GetPrimaryMainFrame()
-                                                   ->GetProcess();
+  ASSERT_EQ(7, browser()->tab_strip_model()->count());
   content::RenderProcessHost* ntp1_host = browser()
                                               ->tab_strip_model()
-                                              ->GetWebContentsAt(1)
+                                              ->GetWebContentsAt(0)
                                               ->GetPrimaryMainFrame()
                                               ->GetProcess();
   content::RenderProcessHost* hosted1_host = browser()
                                                  ->tab_strip_model()
-                                                 ->GetWebContentsAt(2)
+                                                 ->GetWebContentsAt(1)
                                                  ->GetPrimaryMainFrame()
                                                  ->GetProcess();
   content::RenderProcessHost* web1_host = browser()
                                               ->tab_strip_model()
-                                              ->GetWebContentsAt(3)
+                                              ->GetWebContentsAt(2)
                                               ->GetPrimaryMainFrame()
                                               ->GetProcess();
 
-  content::RenderProcessHost* isolated2_host = browser()
-                                                   ->tab_strip_model()
-                                                   ->GetWebContentsAt(4)
-                                                   ->GetPrimaryMainFrame()
-                                                   ->GetProcess();
   content::RenderProcessHost* ntp2_host = browser()
                                               ->tab_strip_model()
-                                              ->GetWebContentsAt(5)
+                                              ->GetWebContentsAt(3)
                                               ->GetPrimaryMainFrame()
                                               ->GetProcess();
   content::RenderProcessHost* hosted2_host = browser()
                                                  ->tab_strip_model()
-                                                 ->GetWebContentsAt(6)
+                                                 ->GetWebContentsAt(4)
                                                  ->GetPrimaryMainFrame()
                                                  ->GetProcess();
   content::RenderProcessHost* web2_host = browser()
                                               ->tab_strip_model()
-                                              ->GetWebContentsAt(7)
+                                              ->GetWebContentsAt(5)
                                               ->GetPrimaryMainFrame()
                                               ->GetProcess();
-
-  content::RenderProcessHost* second_isolated1_host =
-      browser()
-          ->tab_strip_model()
-          ->GetWebContentsAt(8)
-          ->GetPrimaryMainFrame()
-          ->GetProcess();
+  content::RenderProcessHost* hosted1_second_host = browser()
+                                                        ->tab_strip_model()
+                                                        ->GetWebContentsAt(6)
+                                                        ->GetPrimaryMainFrame()
+                                                        ->GetProcess();
 
   // Get extension processes.
   extensions::ProcessManager* process_manager =
-      extensions::ProcessManager::Get(browser()->profile());
+      extensions::ProcessManager::Get(profile());
   content::RenderProcessHost* extension1_host =
-      process_manager->GetSiteInstanceForURL(extension1_url)->GetProcess();
+      (*process_manager->GetRenderFrameHostsForExtension(extension1->id())
+            .begin())
+          ->GetProcess();
   content::RenderProcessHost* extension2_host =
-      process_manager->GetSiteInstanceForURL(extension2_url)->GetProcess();
+      (*process_manager->GetRenderFrameHostsForExtension(extension2->id())
+            .begin())
+          ->GetProcess();
 
-  // An isolated app only shares with other instances of itself, not other
-  // isolated apps or anything else.
-  EXPECT_EQ(isolated1_host, second_isolated1_host);
-  EXPECT_NE(isolated1_host, isolated2_host);
-  EXPECT_NE(isolated1_host, ntp1_host);
-  EXPECT_NE(isolated1_host, hosted1_host);
-  EXPECT_NE(isolated1_host, web1_host);
-  EXPECT_NE(isolated1_host, extension1_host);
-  EXPECT_NE(isolated2_host, ntp1_host);
-  EXPECT_NE(isolated2_host, hosted1_host);
-  EXPECT_NE(isolated2_host, web1_host);
-  EXPECT_NE(isolated2_host, extension1_host);
-
-  // Everything else is clannish.  WebUI only shares with other WebUI.
+  // WebUI only shares with other same-site WebUI.
   EXPECT_EQ(ntp1_host, ntp2_host);
   EXPECT_NE(ntp1_host, hosted1_host);
   EXPECT_NE(ntp1_host, web1_host);
   EXPECT_NE(ntp1_host, extension1_host);
 
-  // Hosted apps only share with each other.
+  // Hosted apps only share with instances of the same app.
   // Note that hosted2_host's app has the background permission and will use
-  // process-per-site mode, but it should still share with hosted1_host's app.
-  EXPECT_EQ(hosted1_host, hosted2_host);
+  // process-per-site mode.
+  EXPECT_EQ(hosted1_host, hosted1_second_host);
+  EXPECT_NE(hosted1_host, hosted2_host);
   EXPECT_NE(hosted1_host, web1_host);
   EXPECT_NE(hosted1_host, extension1_host);
 
-  // Web pages only share with each other.
+  // Same-site web pages only share with each other.
   EXPECT_EQ(web1_host, web2_host);
   EXPECT_NE(web1_host, extension1_host);
 
   // Extensions are not allowed to share, even with each other.
   EXPECT_NE(extension1_host, extension2_host);
-}
-
-// See
-#if BUILDFLAG(IS_WIN)
-#define MAYBE_ExtensionProcessBalancing DISABLED_ExtensionProcessBalancing
-#else
-#define MAYBE_ExtensionProcessBalancing ExtensionProcessBalancing
-#endif
-// Test to verify that the policy of maximum share of extension processes is
-// properly enforced.
-IN_PROC_BROWSER_TEST_F(ProcessManagementTest, MAYBE_ExtensionProcessBalancing) {
-  // Set max renderers to 6 so we can expect 2 extension processes to be
-  // allocated.
-  content::RenderProcessHost::SetMaxRendererProcessCount(6);
-
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  // The app under test acts on URLs whose host is "localhost",
-  // so the URLs we navigate to must have host "localhost".
-  GURL base_url = embedded_test_server()->GetURL(
-      "/extensions/");
-  GURL::Replacements replace_host;
-  replace_host.SetHostStr("localhost");
-  base_url = base_url.ReplaceComponents(replace_host);
-
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("api_test/browser_action/none")));
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("api_test/browser_action/basics")));
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("api_test/browser_action/remove_popup")));
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("api_test/browser_action/add_popup")));
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("api_test/browser_action/no_icon")));
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("isolated_apps/app1")));
-  ASSERT_TRUE(LoadExtension(
-      test_data_dir_.AppendASCII("api_test/management/test")));
-
-  // TODO(lukasza): It might be worth it to navigate to actual
-  // chrome-extension:// URIs below (not to HTTP URIs) to make sure the 1/3rd
-  // of process limit also applies to normal tabs (not just to background pages
-  // and scripts).
-  content::RenderProcessHost* first_renderer =
-      ui_test_utils::NavigateToURL(
-          browser(), base_url.Resolve("isolated_apps/app1/main.html"))
-          ->GetProcess();
-  content::RenderProcessHostWatcher first_renderer_watcher(
-      first_renderer,
-      content::RenderProcessHostWatcher::WATCH_FOR_HOST_DESTRUCTION);
-
-  content::RenderProcessHost* second_renderer =
-      ui_test_utils::NavigateToURL(
-          browser(), base_url.Resolve("api_test/management/test/basics.html"))
-          ->GetProcess();
-
-  std::set<int> process_ids;
-  Profile* profile = browser()->profile();
-  extensions::ProcessManager* epm = extensions::ProcessManager::Get(profile);
-  for (extensions::ExtensionHost* host : epm->background_hosts())
-    process_ids.insert(host->render_process_host()->GetID());
-
-  // We've loaded 5 extensions with background pages
-  // (api_test/browser_action/*), 1 extension without background page
-  // (api_test/management), and one isolated app. Extension process sharing is
-  // not allowed so there is no extension process limit, so each of the 5
-  // background pages/scripts will be hosted in a separate process.
-  EXPECT_EQ(5u, process_ids.size());
-
-  if (first_renderer != second_renderer) {
-    // Wait for the first renderer to be torn down before verifying the number
-    // of processes, else we race with the teardown here (specifically the
-    // UnfreezableFrameMsg_SwapOut -> FrameHostMsg_SwapOut_ACK round trip).
-    first_renderer_watcher.Wait();
-  }
-
-  // ProcessMap will always have exactly 5 entries - one for each of the
-  // extensions with a background page (api_test/browser_action/*).  There won't
-  // be any additional entries, since 1) the isolated app will be associated
-  // with a separate content::BrowserContext and 2) the navigation to
-  // api_test/management/test/basics.html navigates to a file: URI (not to a
-  // chrome-extension: URI).
-  extensions::ProcessMap* process_map = extensions::ProcessMap::Get(profile);
-  EXPECT_EQ(5u, process_map->size());
 }
 
 // Test that pushing both extensions and web processes past the limit creates
@@ -449,14 +321,13 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
 
   // Verify the number of extension processes.
   std::set<int> process_ids;
-  Profile* profile = browser()->profile();
-  ProcessManager* epm = ProcessManager::Get(profile);
+  ProcessManager* epm = ProcessManager::Get(profile());
   for (ExtensionHost* host : epm->background_hosts()) {
     SCOPED_TRACE(testing::Message()
                  << "When testing extension: " << host->extension_id());
     // The process should be locked.
     EXPECT_TRUE(host->render_process_host()->IsProcessLockedToSiteForTesting());
-    process_ids.insert(host->render_process_host()->GetID());
+    process_ids.insert(host->render_process_host()->GetDeprecatedID());
   }
   // Each extension is in a locked process, unavailable for sharing.
   EXPECT_EQ(3u, process_ids.size());
@@ -470,24 +341,20 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   WebContents* web_contents1 =
       browser()->tab_strip_model()->GetActiveWebContents();
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), web_url2, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  NavigateToURLInNewTab(web_url2);
   WebContents* web_contents2 =
       browser()->tab_strip_model()->GetActiveWebContents();
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), web_url3, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  NavigateToURLInNewTab(web_url3);
   WebContents* web_contents3 =
       browser()->tab_strip_model()->GetActiveWebContents();
 
   // Verify the number of processes across extensions and tabs.
   process_ids.insert(
-      web_contents1->GetPrimaryMainFrame()->GetProcess()->GetID());
+      web_contents1->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
   process_ids.insert(
-      web_contents2->GetPrimaryMainFrame()->GetProcess()->GetID());
+      web_contents2->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
   process_ids.insert(
-      web_contents3->GetPrimaryMainFrame()->GetProcess()->GetID());
+      web_contents3->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
 
   // The web processes still share 2 processes as if there were a single
   // extension process (making a total of 5 processes counting the existing 3
@@ -499,18 +366,14 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, ExtensionAndWebProcessOverflow) {
 
   // Add a cross-site web process.
   // Ensure bar.com has its own process by explicitly isolating it.
-  content::IsolateOriginsForTesting(
-      embedded_test_server(),
-      browser()->tab_strip_model()->GetActiveWebContents(), {"bar.com"});
+  content::IsolateOriginsForTesting(embedded_test_server(),
+                                    GetActiveWebContents(), {"bar.com"});
   GURL cross_site_url(
       embedded_test_server()->GetURL("bar.com", "/title1.html"));
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), cross_site_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  WebContents* web_contents4 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  NavigateToURLInNewTab(cross_site_url);
+  WebContents* web_contents4 = GetActiveWebContents();
   process_ids.insert(
-      web_contents4->GetPrimaryMainFrame()->GetProcess()->GetID());
+      web_contents4->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
   // The cross-site process adds 1 more process to the total, to avoid sharing
   // with the existing web renderer processes (due to Site Isolation).
   EXPECT_EQ(6u, process_ids.size());
@@ -527,30 +390,30 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
 
   // Navigate a tab to an extension page.
   GURL extension_url = extension->GetResourceURL("popup.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), extension_url));
-  WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, extension_url));
   EXPECT_EQ(extension_url, web_contents->GetLastCommittedURL());
   content::RenderProcessHost* old_process_host =
       web_contents->GetPrimaryMainFrame()->GetProcess();
 
-  // Note that the |setTimeout| call below is needed to make sure
-  // ExecuteScriptAndExtractBool returns *after* a scheduled navigation has
-  // already started.
+  // Note that the |setTimeout| call below is needed to make sure EvalJs returns
+  // *after* a scheduled navigation has already started.
   GURL web_url(embedded_test_server()->GetURL("foo.com", "/title1.html"));
   std::string navigation_starting_script =
       "var form = document.getElementById('form');\n"
-      "form.action = '" + web_url.spec() + "';\n"
+      "form.action = '" +
+      web_url.spec() +
+      "';\n"
       "form.submit();\n"
-      "setTimeout(\n"
-      "    function() { window.domAutomationController.send(true); },\n"
-      "    0);\n";
+      "new Promise(resolve => {\n"
+      "  setTimeout(\n"
+      "      function() { resolve(true); },\n"
+      "      0);\n"
+      "});";
 
   // Try to trigger navigation to a webpage from within the tab.
-  bool ignored_script_result = false;
   content::TestNavigationObserver nav_observer(web_contents, 1);
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      web_contents, navigation_starting_script, &ignored_script_result));
+  EXPECT_TRUE(content::ExecJs(web_contents, navigation_starting_script));
 
   // Verify that the navigation succeeded.
   nav_observer.Wait();
@@ -569,9 +432,8 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreProcessTest,
                        StoreIsolatedFromRelatedSubdomain) {
   GURL non_cws_url_1 =
       embedded_test_server()->GetURL(GetRelatedSubdomain(), "/title1.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), non_cws_url_1));
-  WebContents* non_cws_contents_1 =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* non_cws_contents_1 = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(non_cws_contents_1, non_cws_url_1));
   EXPECT_EQ(non_cws_url_1, non_cws_contents_1->GetLastCommittedURL());
 
   // We use window.open here to keep this as a renderer-initiated navigation, as
@@ -595,15 +457,25 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreProcessTest,
   WebContents* cws_contents = open_url(GetWebstorePage(), non_cws_contents_1);
 
   // The second non-Webstore page should have been given a different
-  // WebContents, but share the same process with the page that opened it.
+  // WebContents.
   EXPECT_NE(non_cws_contents_1, non_cws_contents_2);
-  EXPECT_EQ(non_cws_contents_1->GetPrimaryMainFrame()->GetProcess(),
-            non_cws_contents_2->GetPrimaryMainFrame()->GetProcess());
+  // The two non-Webstore urls are same-site, but cross-origin. If
+  // kOriginKeyedProcessesByDefault is enabled they will be placed in different
+  // processes, otherwise they'll share a process.
+  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault()) {
+    EXPECT_NE(non_cws_contents_1->GetPrimaryMainFrame()->GetProcess(),
+              non_cws_contents_2->GetPrimaryMainFrame()->GetProcess());
+  } else {
+    EXPECT_EQ(non_cws_contents_1->GetPrimaryMainFrame()->GetProcess(),
+              non_cws_contents_2->GetPrimaryMainFrame()->GetProcess());
+  }
 
   // The Webstore page should have been given a separate WebContents and process
   // than the page that opened it.
   EXPECT_NE(non_cws_contents_1, cws_contents);
   EXPECT_NE(non_cws_contents_1->GetPrimaryMainFrame()->GetProcess(),
+            cws_contents->GetPrimaryMainFrame()->GetProcess());
+  EXPECT_NE(non_cws_contents_2->GetPrimaryMainFrame()->GetProcess(),
             cws_contents->GetPrimaryMainFrame()->GetProcess());
 }
 
@@ -616,32 +488,31 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreProcessTest,
   // that should never be the case.
   GURL web_url =
       embedded_test_server()->GetURL(GetRelatedSubdomain(), "/form.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), web_url));
-  WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, web_url));
   EXPECT_EQ(web_url, web_contents->GetLastCommittedURL());
   content::RenderProcessHost* old_process_host =
       web_contents->GetPrimaryMainFrame()->GetProcess();
 
   GURL cws_web_url = GetWebstorePage();
 
-  // Note that the |setTimeout| call below is needed to make sure
-  // ExecuteScriptAndExtractBool returns *after* a scheduled navigation has
-  // already started.
+  // Note that the |setTimeout| call below is needed to make sure EvalJs returns
+  // *after* a scheduled navigation has already started.
   std::string navigation_starting_script = R"(
       var form = document.getElementById('form');
       form.action = $1;
       form.submit();
-      setTimeout(() => { window.domAutomationController.send(true); }, 0);)";
+      new Promise(resolve => {
+        setTimeout(() => { resolve(true); }, 0);
+      });)";
 
   // Trigger a renderer-initiated POST navigation (via the form) to a Chrome
   // Webstore URL.
-  bool ignored_script_result = false;
   content::TestNavigationObserver nav_observer(web_contents, 1);
 
-  EXPECT_TRUE(content::ExecuteScriptAndExtractBool(
-      web_contents, content::JsReplace(navigation_starting_script, cws_web_url),
-      &ignored_script_result));
+  EXPECT_TRUE(content::ExecJs(
+      web_contents,
+      content::JsReplace(navigation_starting_script, cws_web_url)));
 
   // The expectation is that the store will be properly put in its own process,
   // otherwise the renderer process is going to be terminated.
@@ -649,14 +520,15 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreProcessTest,
   nav_observer.Wait();
   EXPECT_EQ(cws_web_url, web_contents->GetLastCommittedURL());
 
-  // If not using the new Webstore URL, verify that we have the Webstore hosted
-  // app loaded into the Web Contents. Note: the new Webstore is granted it's
-  // powers without use of the hosted app.
+  // If this test is for the old Webstore URL, verify that we have the Webstore
+  // hosted app loaded into the Web Contents.
+  // TODO(crbug.com/328494022): Remove this when we get rid of using the hosted
+  // app for the old Webstore.
   content::RenderProcessHost* new_process_host =
       web_contents->GetPrimaryMainFrame()->GetProcess();
-  if (GetParam() != kNewWebstoreURL) {
+  if (GetParam() == kWebstoreURL) {
     EXPECT_TRUE(extensions::ProcessMap::Get(profile())->Contains(
-        extensions::kWebStoreAppId, new_process_host->GetID()));
+        extensions::kWebStoreAppId, new_process_host->GetDeprecatedID()));
   }
 
   // Verify that Webstore is isolated in a separate renderer process.
@@ -676,7 +548,7 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreInIsolatedOriginTest,
                        NavigationLoadsChromeWebStore) {
   // Sanity check that a SiteInstance for a Chrome Web Store URL requires a
   // dedicated process.
-  content::BrowserContext* context = browser()->profile();
+  content::BrowserContext* context = profile();
   scoped_refptr<content::SiteInstance> cws_site_instance =
       content::SiteInstance::CreateForURL(context, webstore_url());
   EXPECT_TRUE(cws_site_instance->RequiresDedicatedProcess());
@@ -684,9 +556,8 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreInIsolatedOriginTest,
   GURL cws_web_url = GetWebstorePage();
 
   // Navigate to Chrome Web Store and check that it's loaded successfully.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), cws_web_url));
-  WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, cws_web_url));
   EXPECT_EQ(cws_web_url, web_contents->GetLastCommittedURL());
 
   // Double-check that the page has access to the restricted APIs we expect to
@@ -694,14 +565,15 @@ IN_PROC_BROWSER_TEST_P(ChromeWebStoreInIsolatedOriginTest,
   EXPECT_EQ(true, content::EvalJs(web_contents,
                                   "!!chrome && !!chrome.webstorePrivate"));
 
-  // Verify that we have the Webstore hosted app loaded into the Web Contents.
-  // Note: the new Webstore is granted it's powers without use of the hosted
-  // app, so we don't do this check for it.
-  if (GetParam() != kNewWebstoreURL) {
+  // Verify that we have the Webstore hosted app loaded into the Web Contents if
+  // this is for the old Webstore URL. Note: The new Webstore and the Webstore
+  // URL override are granted their powers without use of the hosted app, so we
+  // don't do this check for them.
+  if (GetParam() == kWebstoreURL) {
     content::RenderProcessHost* render_process_host =
         web_contents->GetPrimaryMainFrame()->GetProcess();
     EXPECT_TRUE(extensions::ProcessMap::Get(profile())->Contains(
-        extensions::kWebStoreAppId, render_process_host->GetID()));
+        extensions::kWebStoreAppId, render_process_host->GetDeprecatedID()));
   }
 }
 
@@ -722,9 +594,8 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
       test_data_dir_.AppendASCII("web_request_site_process_registration"));
   ASSERT_TRUE(extension);
 
-  WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  GURL blocked_url(extension->GetResourceURL("/blocked.html"));
+  WebContents* web_contents = GetActiveWebContents();
+  GURL blocked_url(extension->GetResourceURL("blocked.html"));
 
   // Navigating to the blocked extension URL should be done through a redirect,
   // otherwise it will result in an OpenURL IPC from the renderer process, which
@@ -734,17 +605,13 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
 
   // Navigate the current tab to the test page in the extension, which will
   // create the extension process and register the webRequest blocking listener.
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), extension->GetResourceURL("/test.html")));
+  ASSERT_TRUE(
+      NavigateToURL(web_contents, extension->GetResourceURL("test.html")));
 
   // Open a new tab to about:blank, which will result in a new SiteInstance
   // without an explicit site URL set.
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(url::kAboutBlankURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  WebContents* new_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  NavigateToURLInNewTab(GURL(url::kAboutBlankURL));
+  WebContents* new_web_contents = GetActiveWebContents();
 
   // Navigate the new tab to an extension URL that will be blocked by
   // webRequest. It must be a renderer-initiated navigation. It also uses a
@@ -753,7 +620,7 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
   std::string script =
       base::StringPrintf("location.href = '%s';", redirect_url.spec().c_str());
   content::TestNavigationObserver observer(new_web_contents);
-  EXPECT_TRUE(content::ExecuteScript(new_web_contents, script));
+  EXPECT_TRUE(content::ExecJs(new_web_contents, script));
   observer.Wait();
 
   EXPECT_EQ(observer.last_navigation_url(), blocked_url);
@@ -769,7 +636,7 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
   // the process of the |blocked_url|.
   scoped_refptr<content::SiteInstance> new_site_instance =
       content::SiteInstance::CreateForURL(web_contents->GetBrowserContext(),
-                                          extension->GetResourceURL(""));
+                                          extension->url());
   EXPECT_TRUE(new_site_instance->HasProcess());
   EXPECT_EQ(new_site_instance->GetProcess(),
             web_contents->GetSiteInstance()->GetProcess());
@@ -800,12 +667,10 @@ IN_PROC_BROWSER_TEST_F(
                                    std::string(32, 'a') + "/");
   EXPECT_NE(installed_extension, nonexistent_extension);
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("example.com", "/empty.html")));
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(web_contents, embedded_test_server()->GetURL(
+                                              "example.com", "/empty.html")));
   auto can_access_window = [this, web_contents](const GURL& url) {
-    bool can_access = false;
     const char kOpenNewWindow[] = "window.newWin = window.open('%s');";
     const char kGetAccess[] =
         R"(
@@ -818,21 +683,17 @@ IN_PROC_BROWSER_TEST_F(
               canAccess = false;
             }
             window.newWin.close();
-            window.domAutomationController.send(canAccess);
+            canAccess;
          }
        )";
-    EXPECT_TRUE(content::ExecuteScript(
+    EXPECT_TRUE(content::ExecJs(
         web_contents, base::StringPrintf(kOpenNewWindow, url.spec().c_str())));
 
     // WaitForLoadStop() will return false on a 404, but that can happen if we
     // navigate to a blocked or nonexistent extension page.
-    std::ignore = content::WaitForLoadStop(
-        browser()->tab_strip_model()->GetActiveWebContents());
+    std::ignore = content::WaitForLoadStop(GetActiveWebContents());
 
-    EXPECT_TRUE(content::ExecuteScriptAndExtractBool(web_contents, kGetAccess,
-                                                     &can_access));
-
-    return can_access;
+    return content::EvalJs(web_contents, kGetAccess).ExtractBool();
   };
 
   bool can_access_installed = can_access_window(installed_extension);

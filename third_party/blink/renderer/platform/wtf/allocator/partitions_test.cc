@@ -6,11 +6,11 @@
 
 #include <vector>
 
-#include "base/allocator/partition_allocator/memory_reclaimer.h"
 #include "build/build_config.h"
+#include "partition_alloc/memory_reclaimer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace WTF {
+namespace blink {
 
 // Otherwise, PartitionAlloc doesn't allocate any memory, and the tests are
 // meaningless.
@@ -76,4 +76,4 @@ TEST_F(PartitionsTest, Decommit) {
 
 #endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
-}  // namespace WTF
+}  // namespace blink

@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ash/extensions/extensions_permissions_tracker.h"
 
+#include <iterator>
+
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/login/login_state/scoped_test_public_session_login_state.h"
@@ -15,7 +17,6 @@
 #include "extensions/browser/pref_names.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "extensions/common/value_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -47,12 +48,10 @@ class MockExtensionsPermissionsTracker : public ExtensionsPermissionsTracker {
   MockExtensionsPermissionsTracker(ExtensionRegistry* registry,
                                    content::BrowserContext* browser_context)
       : ExtensionsPermissionsTracker(registry, browser_context) {
-    safe_permissions_.insert(
-        kSafePermissionsSet1,
-        kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
-    safe_permissions_.insert(
-        kSafePermissionsSet2,
-        kSafePermissionsSet2 + std::size(kSafePermissionsSet2));
+    safe_permissions_.insert(std::begin(kSafePermissionsSet1),
+                             std::end(kSafePermissionsSet1));
+    safe_permissions_.insert(std::begin(kSafePermissionsSet2),
+                             std::end(kSafePermissionsSet2));
   }
 
   // ExtensionsPermissionsTracker:
@@ -74,8 +73,7 @@ class ExtensionsPermissionsTrackerTest : public testing::Test {
  public:
   ExtensionsPermissionsTrackerTest()
       : prefs_(profile_.GetTestingPrefService()),
-        registry_(ExtensionRegistry::Get(&profile_)),
-        testing_local_state_(TestingBrowserProcess::GetGlobal()) {}
+        registry_(ExtensionRegistry::Get(&profile_)) {}
 
   ExtensionsPermissionsTrackerTest(const ExtensionsPermissionsTrackerTest&) =
       delete;
@@ -104,7 +102,7 @@ class ExtensionsPermissionsTrackerTest : public testing::Test {
       const std::vector<std::string>& permissions) {
     auto extension = ExtensionBuilder(extension_id)
                          .SetID(extension_id)
-                         .AddPermissions(permissions)
+                         .AddAPIPermissions(permissions)
                          .Build();
     registry_->AddEnabled(extension);
 
@@ -114,41 +112,38 @@ class ExtensionsPermissionsTrackerTest : public testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_;
   TestingProfile profile_;
-  sync_preferences::TestingPrefServiceSyncable* prefs_;
-  ExtensionRegistry* registry_;
-  ScopedTestingLocalState testing_local_state_;
+  raw_ptr<sync_preferences::TestingPrefServiceSyncable> prefs_;
+  raw_ptr<ExtensionRegistry> registry_;
   std::unique_ptr<MockExtensionsPermissionsTracker> permissions_tracker_;
 };
 
 TEST_F(ExtensionsPermissionsTrackerTest, EmptyForceList) {
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
   SetupEmptyForceList();
   CreateExtensionsPermissionsTracker();
 
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
 TEST_F(ExtensionsPermissionsTrackerTest, SafeForceListInstalled) {
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
   SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  std::vector<std::string> v2(
-      kSafePermissionsSet2,
-      kSafePermissionsSet2 + std::size(kSafePermissionsSet2));
+  std::vector<std::string> v2(std::begin(kSafePermissionsSet2),
+                              std::end(kSafePermissionsSet2));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -156,18 +151,16 @@ TEST_F(ExtensionsPermissionsTrackerTest, UnsafeForceListInstalled) {
   SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
 
-  std::vector<std::string> v2(
-      kUnsafePermissionsSet2,
-      kUnsafePermissionsSet2 + std::size(kUnsafePermissionsSet2));
+  std::vector<std::string> v2(std::begin(kUnsafePermissionsSet2),
+                              std::end(kUnsafePermissionsSet2));
 
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -175,17 +168,15 @@ TEST_F(ExtensionsPermissionsTrackerTest, MixedForceListInstalled) {
   SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  std::vector<std::string> v2(
-      kSafePermissionsSet2,
-      kSafePermissionsSet2 + std::size(kSafePermissionsSet2));
+  std::vector<std::string> v2(std::begin(kSafePermissionsSet2),
+                              std::end(kSafePermissionsSet2));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -193,28 +184,25 @@ TEST_F(ExtensionsPermissionsTrackerTest, ForceListIncreased) {
   auto dict = SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  std::vector<std::string> v2(
-      kSafePermissionsSet2,
-      kSafePermissionsSet2 + std::size(kSafePermissionsSet2));
+  std::vector<std::string> v2(std::begin(kSafePermissionsSet2),
+                              std::end(kSafePermissionsSet2));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
   dict.Set(kExtensionId3, kExtensionUrl3);
   prefs_->SetManagedPref(pref_names::kInstallForceList, std::move(dict));
 
-  std::vector<std::string> v3(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v3(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId3, v3);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -222,22 +210,20 @@ TEST_F(ExtensionsPermissionsTrackerTest, ForceListDecreased) {
   auto dict = SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  std::vector<std::string> v2(
-      kSafePermissionsSet2,
-      kSafePermissionsSet2 + std::size(kSafePermissionsSet2));
+  std::vector<std::string> v2(std::begin(kSafePermissionsSet2),
+                              std::end(kSafePermissionsSet2));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
   dict.Remove(kExtensionId1);
   prefs_->SetManagedPref(pref_names::kInstallForceList, std::move(dict));
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -245,20 +231,18 @@ TEST_F(ExtensionsPermissionsTrackerTest, SafePendingExtensions) {
   auto dict = SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
-  std::vector<std::string> v2(
-      kSafePermissionsSet2,
-      kSafePermissionsSet2 + std::size(kSafePermissionsSet2));
+  std::vector<std::string> v2(std::begin(kSafePermissionsSet2),
+                              std::end(kSafePermissionsSet2));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -266,20 +250,18 @@ TEST_F(ExtensionsPermissionsTrackerTest, UnsafePendingExtensions) {
   SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
-  std::vector<std::string> v2(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v2(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -287,29 +269,27 @@ TEST_F(ExtensionsPermissionsTrackerTest, UnsafeForceListChanged) {
   auto dict = SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  std::vector<std::string> v2(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v2(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
   dict.Remove(kExtensionId1);
   prefs_->SetManagedPref(pref_names::kInstallForceList, dict.Clone());
 
-  EXPECT_TRUE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_TRUE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 
   dict.Remove(kExtensionId2);
   prefs_->SetManagedPref(pref_names::kInstallForceList, dict.Clone());
 
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 
@@ -317,22 +297,19 @@ TEST_F(ExtensionsPermissionsTrackerTest, OtherExtensionsLoaded) {
   SetupForceList();
   CreateExtensionsPermissionsTracker();
 
-  std::vector<std::string> v1(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v1(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId1, v1);
 
-  std::vector<std::string> v2(
-      kSafePermissionsSet1,
-      kSafePermissionsSet1 + std::size(kSafePermissionsSet1));
+  std::vector<std::string> v2(std::begin(kSafePermissionsSet1),
+                              std::end(kSafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId2, v2);
 
-  std::vector<std::string> v3(
-      kUnsafePermissionsSet1,
-      kUnsafePermissionsSet1 + std::size(kUnsafePermissionsSet1));
+  std::vector<std::string> v3(std::begin(kUnsafePermissionsSet1),
+                              std::end(kUnsafePermissionsSet1));
   AddExtensionWithIdAndPermissions(kExtensionId3, v3);
 
-  EXPECT_FALSE(testing_local_state_.Get()->GetBoolean(
+  EXPECT_FALSE(TestingBrowserProcess::GetGlobal()->local_state()->GetBoolean(
       prefs::kManagedSessionUseFullLoginWarning));
 }
 

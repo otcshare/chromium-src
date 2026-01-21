@@ -4,8 +4,10 @@
 
 #include "components/cast_receiver/browser/page_state_observer.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/process/kill.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -152,8 +154,8 @@ class PageStateObserver::WebContentsObserverWrapper
     TryCallOnPageStopped(StopReason::kHttpError, net::ERR_UNEXPECTED);
   }
 
-  content::NavigationHandle* navigation_handle_ = nullptr;
-  base::raw_ref<PageStateObserver> wrapped_;
+  raw_ptr<content::NavigationHandle> navigation_handle_ = nullptr;
+  raw_ref<PageStateObserver> wrapped_;
 };
 
 PageStateObserver::PageStateObserver()

@@ -9,26 +9,33 @@
 
 #include <stdint.h>
 #include <string>
+#include "base/memory/raw_ptr.h"
 
+#include "chromeos/ash/components/phonehub/phone_hub_structured_metrics_logger.h"
+#include "chromeos/ash/components/phonehub/phone_hub_ui_readiness_recorder.h"
 #include "chromeos/ash/components/phonehub/proto/phonehub_api.pb.h"
 
 namespace ash {
 
 namespace secure_channel {
 class ConnectionManager;
-}
+}  // namespace secure_channel
 
 namespace phonehub {
 
 class MessageSenderImpl : public MessageSender {
  public:
-  explicit MessageSenderImpl(
-      secure_channel::ConnectionManager* connection_manager);
+  MessageSenderImpl(
+      secure_channel::ConnectionManager* connection_manager,
+      PhoneHubUiReadinessRecorder* phone_hub_ui_readiness_recorder,
+      PhoneHubStructuredMetricsLogger* phone_hub_structured_metrics_logger);
   ~MessageSenderImpl() override;
 
   // MessageSender:
-  void SendCrosState(bool notification_setting_enabled,
-                     bool camera_roll_setting_enabled) override;
+  void SendCrosState(
+      bool notification_setting_enabled,
+      bool camera_roll_setting_enabled,
+      const std::vector<std::string>* attestation_certs) override;
   void SendUpdateNotificationModeRequest(bool do_not_disturb_enabled) override;
   void SendUpdateBatteryModeRequest(bool battery_saver_mode_enabled) override;
   void SendDismissNotificationRequest(int64_t notification_id) override;
@@ -50,7 +57,9 @@ class MessageSenderImpl : public MessageSender {
   void SendMessage(proto::MessageType message_type,
                    const google::protobuf::MessageLite* request);
 
-  secure_channel::ConnectionManager* connection_manager_;
+  raw_ptr<secure_channel::ConnectionManager> connection_manager_;
+  raw_ptr<PhoneHubUiReadinessRecorder> phone_hub_ui_readiness_recorder_;
+  raw_ptr<PhoneHubStructuredMetricsLogger> phone_hub_structured_metrics_logger_;
 };
 
 }  // namespace phonehub

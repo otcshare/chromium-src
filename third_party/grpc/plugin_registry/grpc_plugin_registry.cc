@@ -20,14 +20,19 @@
 // gRPC repo's src/core/plugin_registry/grpc_plugin_registry.cc then comment out
 // several lb plugins that have been stripped out by BUILD.chromium.gn.template
 
+#include <grpc/grpc.h>
 #include <grpc/support/port_platform.h>
 
-#include <grpc/grpc.h>
+#include "third_party/grpc/source/src/core/config/core_configuration.h"
+#include "third_party/grpc/source/src/core/handshaker/http_connect/http_connect_handshaker.h"
+#include "third_party/grpc/source/src/core/handshaker/tcp_connect/tcp_connect_handshaker.h"
 
-#include "third_party/grpc/src/src/core/lib/config/core_configuration.h"
-#include "third_party/grpc/src/src/core/lib/surface/builtins.h"
-#include "third_party/grpc/src/src/core/lib/transport/http_connect_handshaker.h"
-#include "third_party/grpc/src/src/core/lib/transport/tcp_connect_handshaker.h"
+namespace grpc_event_engine {
+namespace experimental {
+extern void RegisterEventEngineChannelArgPreconditioning(
+    grpc_core::CoreConfiguration::Builder* builder);
+}  // namespace experimental
+}
 
 namespace grpc_core {
 
@@ -47,6 +52,7 @@ extern void RegisterServiceConfigChannelArgFilter(
 extern void RegisterExtraFilters(CoreConfiguration::Builder* builder);
 extern void RegisterResourceQuota(CoreConfiguration::Builder* builder);
 extern void FaultInjectionFilterRegister(CoreConfiguration::Builder* builder);
+extern void RegisterBackendMetricFilter(CoreConfiguration::Builder* builder);
 extern void RegisterNativeDnsResolver(CoreConfiguration::Builder* builder);
 extern void RegisterAresDnsResolver(CoreConfiguration::Builder* builder);
 extern void RegisterSockaddrResolver(CoreConfiguration::Builder* builder);
@@ -57,6 +63,8 @@ extern void RegisterOutlierDetectionLbPolicy(
 extern void RegisterWeightedTargetLbPolicy(CoreConfiguration::Builder* builder);
 extern void RegisterPickFirstLbPolicy(CoreConfiguration::Builder* builder);
 extern void RegisterRoundRobinLbPolicy(CoreConfiguration::Builder* builder);
+extern void RegisterWeightedRoundRobinLbPolicy(
+    CoreConfiguration::Builder* builder);
 extern void RegisterRingHashLbPolicy(CoreConfiguration::Builder* builder);
 extern void RegisterHttpProxyMapper(CoreConfiguration::Builder* builder);
 #ifndef GRPC_NO_RLS
@@ -67,6 +75,8 @@ extern void RegisterBinderResolver(CoreConfiguration::Builder* builder);
 #endif
 
 void BuildCoreConfiguration(CoreConfiguration::Builder* builder) {
+  grpc_event_engine::experimental::RegisterEventEngineChannelArgPreconditioning(
+      builder);
   // The order of the handshaker registration is crucial here.
   // We want TCP connect handshaker to be registered last so that it is added to
   // the start of the handshaker list.
@@ -77,6 +87,7 @@ void BuildCoreConfiguration(CoreConfiguration::Builder* builder) {
   // RegisterWeightedTargetLbPolicy(builder);
   RegisterPickFirstLbPolicy(builder);
   // RegisterRoundRobinLbPolicy(builder);
+  // RegisterWeightedRoundRobinLbPolicy(builder);
   // RegisterRingHashLbPolicy(builder);
   BuildClientChannelConfiguration(builder);
   SecurityRegisterHandshakerFactories(builder);
@@ -102,9 +113,9 @@ void BuildCoreConfiguration(CoreConfiguration::Builder* builder) {
 #endif  // !GRPC_NO_RLS
   // Run last so it gets a consistent location.
   // TODO(ctiller): Is this actually necessary?
+  RegisterBackendMetricFilter(builder);
   RegisterSecurityFilters(builder);
   RegisterExtraFilters(builder);
-  RegisterBuiltins(builder);
 }
 
 }  // namespace grpc_core

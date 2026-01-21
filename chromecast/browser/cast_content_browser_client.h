@@ -8,8 +8,10 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
@@ -18,11 +20,12 @@
 #include "chromecast/metrics/cast_metrics_service_client.h"
 #include "content/public/browser/certificate_request_result_type.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/browser/navigation_throttle_registry.h"
 #include "media/mojo/buildflags.h"
 #include "media/mojo/mojom/media_service.mojom.h"
 #include "media/mojo/mojom/renderer.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/cpp/identity.h"
 #include "services/service_manager/public/cpp/manifest.h"
@@ -55,6 +58,10 @@ class MetricsService;
 namespace net {
 class SSLPrivateKey;
 class X509Certificate;
+}  // namespace net
+
+namespace os_crypt_async {
+class OSCryptAsync;
 }
 
 namespace chromecast {
@@ -65,7 +72,6 @@ class CastWindowManager;
 class CastFeatureListCreator;
 class DisplaySettingsManager;
 class GeneralAudienceBrowsingService;
-class MemoryPressureControllerImpl;
 class ServiceConnector;
 
 namespace media {
@@ -74,10 +80,9 @@ class CmaBackendFactory;
 class MediaPipelineBackendManager;
 class MediaResourceTracker;
 class VideoGeometrySetterService;
-class VideoPlaneController;
 class VideoModeSwitcher;
 class VideoResolutionPolicy;
-}
+}  // namespace media
 
 namespace shell {
 class CastBrowserMainParts;
@@ -113,7 +118,6 @@ class CastContentBrowserClient
       CastSystemMemoryPressureEvaluatorAdjuster*
           cast_system_memory_pressure_evaluator_adjuster,
       PrefService* pref_service,
-      media::VideoPlaneController* video_plane_controller,
       CastWindowManager* window_manager,
       CastWebService* web_service,
       DisplaySettingsManager* display_settings_manager);
@@ -167,23 +171,22 @@ class CastContentBrowserClient
   virtual void RunServiceInstance(
       const service_manager::Identity& identity,
       mojo::PendingReceiver<service_manager::mojom::Service>* receiver);
-  virtual absl::optional<service_manager::Manifest> GetServiceManifestOverlay(
-      base::StringPiece service_name);
+  virtual std::optional<service_manager::Manifest> GetServiceManifestOverlay(
+      std::string_view service_name);
   std::vector<service_manager::Manifest> GetExtraServiceManifests();
   std::vector<std::string> GetStartupServices();
 
   // content::ContentBrowserClient implementation:
   std::unique_ptr<content::BrowserMainParts> CreateBrowserMainParts(
       bool is_integration_test) override;
-  void RenderProcessWillLaunch(content::RenderProcessHost* host) override;
   bool IsHandledURL(const GURL& url) override;
-  void SiteInstanceGotProcess(content::SiteInstance* site_instance) override;
   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
                                       int child_process_id) override;
   std::string GetAcceptLangs(content::BrowserContext* context) override;
   network::mojom::NetworkContext* GetSystemNetworkContext() override;
-  void OverrideWebkitPrefs(content::WebContents* web_contents,
-                           blink::web_pref::WebPreferences* prefs) override;
+  void OverrideWebPreferences(content::WebContents* web_contents,
+                              content::SiteInstance& main_frame_site,
+                              blink::web_pref::WebPreferences* prefs) override;
   std::string GetApplicationLocale() override;
   void AllowCertificateError(
       content::WebContents* web_contents,
@@ -195,6 +198,8 @@ class CastContentBrowserClient
       base::OnceCallback<void(content::CertificateRequestResultType)> callback)
       override;
   base::OnceClosure SelectClientCertificate(
+      content::BrowserContext* browser_context,
+      int process_id,
       content::WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
@@ -237,16 +242,12 @@ class CastContentBrowserClient
   std::unique_ptr<content::NavigationUIData> GetNavigationUIData(
       content::NavigationHandle* navigation_handle) override;
   bool ShouldEnableStrictSiteIsolation() override;
-  std::vector<std::unique_ptr<content::NavigationThrottle>>
-  CreateThrottlesForNavigation(content::NavigationHandle* handle) override;
-  void RegisterNonNetworkNavigationURLLoaderFactories(
-      int frame_tree_node_id,
-      ukm::SourceIdObj ukm_source_id,
-      NonNetworkURLLoaderFactoryMap* factories) override;
+  void CreateThrottlesForNavigation(
+      content::NavigationThrottleRegistry& registry) override;
   void RegisterNonNetworkSubresourceURLLoaderFactories(
       int render_process_id,
       int render_frame_id,
-      const absl::optional<url::Origin>& request_initiator_origin,
+      const std::optional<url::Origin>& request_initiator_origin,
       NonNetworkURLLoaderFactoryMap* factories) override;
   void OnNetworkServiceCreated(
       network::mojom::NetworkService* network_service) override;
@@ -261,16 +262,9 @@ class CastContentBrowserClient
   bool DoesSiteRequireDedicatedProcess(content::BrowserContext* browser_context,
                                        const GURL& effective_site_url) override;
   bool IsWebUIAllowedToMakeNetworkRequests(const url::Origin& origin) override;
-  bool ShouldAllowInsecurePrivateNetworkRequests(
+  PrivateNetworkRequestPolicyOverride ShouldOverridePrivateNetworkRequestPolicy(
       content::BrowserContext* browser_context,
       const url::Origin& origin) override;
-  std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
-  CreateURLLoaderThrottles(
-      const network::ResourceRequest& request,
-      content::BrowserContext* browser_context,
-      const base::RepeatingCallback<content::WebContents*()>& wc_getter,
-      content::NavigationUIData* navigation_ui_data,
-      int frame_tree_node_id) override;
 
   CastFeatureListCreator* GetCastFeatureListCreator() {
     return cast_feature_list_creator_;
@@ -296,9 +290,6 @@ class CastContentBrowserClient
   CastBrowserMainParts* browser_main_parts() {
     return cast_browser_main_parts_;
   }
-
-  void BindMediaRenderer(
-      mojo::PendingReceiver<::media::mojom::Renderer> receiver);
 
   void GetApplicationMediaInfo(std::string* application_session_id,
                                bool* mixer_audio_enabled,
@@ -340,10 +331,6 @@ class CastContentBrowserClient
 
   // A static cache to hold crash_handlers for each process_type
   std::map<std::string, breakpad::CrashHandlerHostLinux*> crash_handlers_;
-
-  // Notify renderers of memory pressure (Android renderers register directly
-  // with OS for this).
-  std::unique_ptr<MemoryPressureControllerImpl> memory_pressure_controller_;
 #endif  // !BUILDFLAG(IS_ANDROID)
 #endif  // !BUILDFLAG(IS_FUCHSIA)
 
@@ -369,6 +356,7 @@ class CastContentBrowserClient
 
   // Created by CastContentBrowserClient but owned by BrowserMainLoop.
   CastBrowserMainParts* cast_browser_main_parts_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
   std::unique_ptr<CastNetworkContexts> cast_network_contexts_;
   std::unique_ptr<media::CmaBackendFactory> cma_backend_factory_;
   std::unique_ptr<GeneralAudienceBrowsingService>

@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/task_manager/providers/fallback_task_provider.h"
+
 #include <stdint.h>
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include <algorithm>
+#include <vector>
+
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_mock_time_message_loop_task_runner.h"
-#include "chrome/browser/task_manager/providers/fallback_task_provider.h"
 #include "chrome/browser/task_manager/providers/task.h"
 #include "chrome/browser/task_manager/task_manager_observer.h"
 #include "content/public/common/process_type.h"
@@ -34,7 +36,7 @@ class FakeTask : public Task {
 
   int GetChildProcessUniqueID() const override { return 0; }
 
-  const Task* GetParentTask() const override { return nullptr; }
+  base::WeakPtr<Task> GetParentTask() const override { return nullptr; }
 
   SessionID GetTabId() const override { return SessionID::InvalidValue(); }
 
@@ -60,7 +62,7 @@ class FakeTaskProvider : public TaskProvider {
 
   void TaskRemoved(Task* task) {
     NotifyObserverTaskRemoved(task);
-    base::Erase(task_provider_tasks_, task);
+    std::erase(task_provider_tasks_, task);
   }
 
  private:
@@ -72,7 +74,7 @@ class FakeTaskProvider : public TaskProvider {
 
   void StopUpdating() override {}
 
-  std::vector<Task*> task_provider_tasks_;
+  std::vector<raw_ptr<Task, VectorExperimental>> task_provider_tasks_;
 };
 
 // Defines a test for the child process task provider and the child process
@@ -97,13 +99,13 @@ class FallbackTaskProviderTest : public testing::Test,
 
   // task_manager::TaskProviderObserver:
   void TaskAdded(Task* task) override {
-    EXPECT_FALSE(base::Contains(seen_tasks_, task));
+    EXPECT_FALSE(std::ranges::contains(seen_tasks_, task));
     seen_tasks_.emplace_back(task);
   }
 
   void TaskRemoved(Task* task) override {
-    EXPECT_TRUE(base::Contains(seen_tasks_, task));
-    base::Erase(seen_tasks_, task);
+    EXPECT_TRUE(std::ranges::contains(seen_tasks_, task));
+    std::erase(seen_tasks_, task);
   }
 
   // This adds tasks to the first primary subprovider.
@@ -171,19 +173,25 @@ class FallbackTaskProviderTest : public testing::Test,
   }
 
   // This is the vector of tasks the FallbackTaskProvider has told us about.
-  std::vector<Task*> seen_tasks() { return seen_tasks_; }
+  std::vector<raw_ptr<Task, VectorExperimental>> seen_tasks() {
+    return seen_tasks_;
+  }
+
+  void FastForwardBy(base::TimeDelta delay) {
+    task_environment_.FastForwardBy(delay);
+  }
 
  private:
-  content::BrowserTaskEnvironment task_environment_;
+  content::BrowserTaskEnvironment task_environment_{
+      content::BrowserTaskEnvironment::TimeSource::MOCK_TIME};
   std::unique_ptr<FallbackTaskProvider> task_provider_;
-  std::vector<Task*> seen_tasks_;
+  std::vector<raw_ptr<Task, VectorExperimental>> seen_tasks_;
 };
 
 TEST_F(FallbackTaskProviderTest, BasicTest) {
   // The delay for showing a secondary source is 750ms; delay 1000ms to ensure
   // we see them.
   base::TimeDelta delay = base::Milliseconds(1000);
-  base::ScopedMockTimeMessageLoopTaskRunner mock_main_runner;
   StartUpdating();
 
   // There are two primary task providers and one secondary task provider. The
@@ -196,12 +204,12 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
 
   FakeTask fake_secondary_task_1_1(1, Task::RENDERER, "S_1_1");
   SecondaryTaskAdded(&fake_secondary_task_1_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ("S_1_1\n", DumpSeenTasks());
 
   FakeTask fake_secondary_task_1_2(1, Task::RENDERER, "S_1_2");
   SecondaryTaskAdded(&fake_secondary_task_1_2);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "S_1_1\n"
       "S_1_2\n",
@@ -209,17 +217,17 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
 
   FakeTask fake_primary_task_1_1(1, Task::RENDERER, "P_1_1");
   FirstPrimaryTaskAdded(&fake_primary_task_1_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ("P_1_1\n", DumpSeenTasks());
 
   FakeTask fake_secondary_task_1_3(1, Task::RENDERER, "S_1_3");
   SecondaryTaskAdded(&fake_secondary_task_1_3);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ("P_1_1\n", DumpSeenTasks());
 
   FakeTask fake_secondary_task_2_1(2, Task::RENDERER, "S_2_1");
   SecondaryTaskAdded(&fake_secondary_task_2_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "P_1_1\n"
       "S_2_1\n",
@@ -227,7 +235,7 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
 
   FakeTask fake_primary_task_3_1(3, Task::RENDERER, "Q_3_1");
   SecondPrimaryTaskAdded(&fake_primary_task_3_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "P_1_1\n"
       "S_2_1\n"
@@ -235,7 +243,7 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
       DumpSeenTasks());
 
   FirstPrimaryTaskRemoved(&fake_primary_task_1_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "S_2_1\n"
       "Q_3_1\n"
@@ -250,7 +258,7 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
   // After updating the primary tasks (Ps) will be added before the secondary
   // tasks (Ss) so it is reordered.
   StartUpdating();
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "Q_3_1\n"
       "S_1_1\n"
@@ -260,7 +268,7 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
       DumpSeenTasks());
 
   FirstPrimaryTaskAdded(&fake_primary_task_1_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "Q_3_1\n"
       "S_2_1\n"
@@ -277,7 +285,7 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
       DumpSeenTasks());
 
   FirstPrimaryTaskRemoved(&fake_primary_task_1_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "Q_3_1\n"
       "S_2_1\n"
@@ -285,21 +293,21 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
       DumpSeenTasks());
 
   SecondaryTaskRemoved(&fake_secondary_task_2_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "Q_3_1\n"
       "P_1_2\n",
       DumpSeenTasks());
 
   SecondaryTaskRemoved(&fake_secondary_task_1_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "Q_3_1\n"
       "P_1_2\n",
       DumpSeenTasks());
 
   FirstPrimaryTaskRemoved(&fake_primary_task_1_2);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "Q_3_1\n"
       "S_1_2\n"
@@ -307,7 +315,7 @@ TEST_F(FallbackTaskProviderTest, BasicTest) {
       DumpSeenTasks());
 
   SecondPrimaryTaskRemoved(&fake_primary_task_3_1);
-  mock_main_runner->FastForwardBy(delay);
+  FastForwardBy(delay);
   EXPECT_EQ(
       "S_1_2\n"
       "S_1_3\n",

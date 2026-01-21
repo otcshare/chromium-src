@@ -6,17 +6,19 @@
 
 #include "base/android/jni_array.h"
 #include "base/check.h"
-#include "testing/android/native_test/native_test_jni_headers/MainRunner_jni.h"
 #include "testing/android/native_test/native_test_util.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "testing/android/native_test/native_main_runner_jni/MainRunner_jni.h"
 
 extern int main(int argc, char** argv);
 
 namespace testing {
 namespace android {
 
-static jint JNI_MainRunner_RunMain(
+static int32_t JNI_MainRunner_RunMain(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobjectArray>& command_line) {
+    const base::android::JavaRef<jobjectArray>& command_line) {
   // Guards against process being reused.
   // In most cases, running main again will cause problems (static variables,
   // singletons, lazy instances won't be in the same state as a clean run).
@@ -25,7 +27,8 @@ static jint JNI_MainRunner_RunMain(
   alreadyRun = true;
 
   std::vector<std::string> cpp_command_line;
-  AppendJavaStringArrayToStringVector(env, command_line, &cpp_command_line);
+  base::android::AppendJavaStringArrayToStringVector(env, command_line,
+                                                     &cpp_command_line);
 
   std::vector<char*> argv;
   int argc = ArgsToArgv(cpp_command_line, &argv);
@@ -34,3 +37,5 @@ static jint JNI_MainRunner_RunMain(
 
 }  // namespace android
 }  // namespace testing
+
+DEFINE_JNI(MainRunner)

@@ -9,20 +9,24 @@
 
 namespace download {
 
-// Called when deciding whether to show the bubble or the old download shelf UI.
-bool IsDownloadBubbleEnabled(Profile* profile);
-
-// V2 is only eligible to be enabled if V1 is also enabled.
-bool IsDownloadBubbleV2Enabled(Profile* profile);
-
 // Called when deciding whether to show or hide the bubble.
 bool ShouldShowDownloadBubble(Profile* profile);
 
-// Called when deciding whehther to pop up the bubble automatically when a
-// download has started or completed.
-bool ShouldShowDetailsAutomatically(Profile* profile);
+// Whether the partial view should be shown automatically when downloads are
+// finished.
+bool IsDownloadBubblePartialViewEnabled(Profile* profile);
 
-bool IsDownloadConnectorEnabled(Profile* profile);
+// Set the pref governing whether the partial view should be shown automatically
+// when downloads are finished.
+void SetDownloadBubblePartialViewEnabled(Profile* profile, bool enabled);
+
+// Whether the setting is controlled by pref and is the default value (not set
+// by the user).
+bool IsDownloadBubblePartialViewEnabledDefaultPrefValue(Profile* profile);
+
+// The number of partial view impressions.
+int DownloadBubblePartialViewImpressions(Profile* profile);
+void SetDownloadBubblePartialViewImpressions(Profile* profile, int count);
 
 }  // namespace download
 

@@ -5,12 +5,10 @@
 #include "CheckForbiddenFieldsVisitor.h"
 #include "BlinkGCPluginOptions.h"
 
-#include <string_view>
-
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 
-CheckForbiddenFieldsVisitor::CheckForbiddenFieldsVisitor(
-    const BlinkGCPluginOptions& options) {}
+CheckForbiddenFieldsVisitor::CheckForbiddenFieldsVisitor() {}
 
 CheckForbiddenFieldsVisitor::Errors&
 CheckForbiddenFieldsVisitor::forbidden_fields() {
@@ -18,7 +16,7 @@ CheckForbiddenFieldsVisitor::forbidden_fields() {
 }
 
 bool CheckForbiddenFieldsVisitor::ContainsForbiddenFields(RecordInfo* info) {
-  bool managed_host = info->IsStackAllocated() || info->IsGCAllocated() ||
+  bool managed_host = info->IsStackAllocated() || info->IsGCDerived() ||
                       info->IsNewDisallowed();
   if (!managed_host)
     return false;
@@ -47,26 +45,51 @@ void CheckForbiddenFieldsVisitor::VisitValue(Value* edge) {
 
   visiting_set_.insert(edge->value());
 
-  // If the value is an embedded object, then continue checking for invalid
-  // fields.
-  for (Edge* edge : llvm::reverse(context())) {
-    if (!edge->IsCollection())
-      return;
+  // We want to keep recursing into the current field if we did not encounter
+  // something else than a collection during our recursion. However, in case of
+  // pointers, we still want to check whether their template specializations
+  // are forbidden classes, and then stop the recursion.
+  bool keep_recursing = true;
+  bool check_for_forbidden_fields = true;
+  for (Edge* e : llvm::reverse(context())) {
+    if (!e->IsCollection()) {
+      keep_recursing = false;
+      check_for_forbidden_fields = false;
+      if (e->IsRawPtr() || e->IsRefPtr() || e->IsUniquePtr()) {
+        check_for_forbidden_fields = true;
+      }
+    }
   }
 
-  if (ContainsInvalidFieldTypes(edge))
+  if (check_for_forbidden_fields && ContainsInvalidFieldTypes(edge)) {
+    visiting_set_.erase(edge->value());
     return;
+  }
 
-  ContainsForbiddenFieldsInternal(edge->value());
+  if (keep_recursing) {
+    ContainsForbiddenFieldsInternal(edge->value());
+  }
+
   visiting_set_.erase(edge->value());
 }
 
+void CheckForbiddenFieldsVisitor::VisitArrayEdge(ArrayEdge* edge) {
+  if (edge->element()->IsValue()) {
+    edge->element()->Accept(this);
+  }
+}
+
 bool CheckForbiddenFieldsVisitor::ContainsInvalidFieldTypes(Value* edge) {
-  constexpr std::array<std::pair<std::string_view, Error>, 3> kErrors = {{
+  constexpr std::pair<llvm::StringRef, Error> kErrors[] = {
       {"blink::TaskRunnerTimer", Error::kTaskRunnerInGCManaged},
       {"mojo::Receiver", Error::kMojoReceiverInGCManaged},
       {"mojo::Remote", Error::kMojoRemoteInGCManaged},
-  }};
+  };
+
+  constexpr std::pair<llvm::StringRef, Error> kOptionalAssociatedErrors[] = {
+      {"mojo::AssociatedRemote", Error::kMojoAssociatedRemoteInGCManaged},
+      {"mojo::AssociatedReceiver", Error::kMojoAssociatedReceiverInGCManaged},
+  };
 
   auto* decl = edge->value()->record()->getDefinition();
   if (!decl) {
@@ -75,13 +98,22 @@ bool CheckForbiddenFieldsVisitor::ContainsInvalidFieldTypes(Value* edge) {
 
   auto type_name = decl->getQualifiedNameAsString();
   auto it = std::find_if(
-      kErrors.begin(), kErrors.end(),
+      std::begin(kErrors), std::end(kErrors),
       [&type_name](const auto& val) { return val.first == type_name; });
 
-  if (it == kErrors.end()) {
-    return false;
+  if (it != std::end(kErrors)) {
+    forbidden_fields_.push_back({current_, it->second});
+    return true;
   }
 
-  forbidden_fields_.push_back(std::make_pair(current_, it->second));
-  return true;
+  it = std::find_if(
+      std::begin(kOptionalAssociatedErrors),
+      std::end(kOptionalAssociatedErrors),
+      [&type_name](const auto& val) { return val.first == type_name; });
+  if (it != std::end(kOptionalAssociatedErrors)) {
+    forbidden_fields_.push_back({current_, it->second});
+    return true;
+  }
+
+  return false;
 }

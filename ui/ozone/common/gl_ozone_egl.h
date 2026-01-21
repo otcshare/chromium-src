@@ -5,7 +5,7 @@
 #ifndef UI_OZONE_COMMON_GL_OZONE_EGL_H_
 #define UI_OZONE_COMMON_GL_OZONE_EGL_H_
 
-#include "base/callback.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "third_party/khronos/EGL/eglplatform.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface_egl.h"
@@ -24,7 +24,10 @@ class GLOzoneEGL : public GLOzone {
   ~GLOzoneEGL() override {}
 
   // GLOzone:
-  gl::GLDisplay* InitializeGLOneOffPlatform(uint64_t system_device_id) override;
+  gl::GLDisplay* InitializeGLOneOffPlatform(
+      bool supports_angle,
+      std::vector<gl::DisplayType> init_displays,
+      gl::GpuPreference gpu_preference) override;
   bool InitializeStaticGLBindings(
       const gl::GLImplementationParts& implementation) override;
   void SetDisabledExtensionsPlatform(
@@ -32,15 +35,16 @@ class GLOzoneEGL : public GLOzone {
   bool InitializeExtensionSettingsOneOffPlatform(
       gl::GLDisplay* display) override;
   void ShutdownGL(gl::GLDisplay* display) override;
-  bool CanImportNativePixmap() override;
+  bool CanImportNativePixmap(viz::SharedImageFormat format) override;
   std::unique_ptr<NativePixmapGLBinding> ImportNativePixmap(
       scoped_refptr<gfx::NativePixmap> pixmap,
-      gfx::BufferFormat plane_format,
+      viz::SharedImageFormat plane_format,
       gfx::BufferPlane plane,
       gfx::Size plane_size,
       const gfx::ColorSpace& color_space,
       GLenum target,
       GLuint texture_id) override;
+
   bool GetGLWindowSystemBindingInfo(
       const gl::GLVersionInfo& gl_info,
       gl::GLWindowSystemBindingInfo* info) override;

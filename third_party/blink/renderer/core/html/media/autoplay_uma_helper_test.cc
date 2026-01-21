@@ -37,7 +37,7 @@ class MockAutoplayUmaHelper : public AutoplayUmaHelper {
 class AutoplayUmaHelperTest : public PageTestBase {
  protected:
   HTMLMediaElement& MediaElement() {
-    Element* element = GetDocument().getElementById("video");
+    Element* element = GetDocument().getElementById(AtomicString("video"));
     DCHECK(element);
     return To<HTMLVideoElement>(*element);
   }
@@ -47,8 +47,8 @@ class AutoplayUmaHelperTest : public PageTestBase {
  private:
   void SetUp() override {
     PageTestBase::SetUp();
-    GetDocument().documentElement()->setInnerHTML("<video id=video></video>",
-                                                  ASSERT_NO_EXCEPTION);
+    GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
+        "<video id=video></video>", ASSERT_NO_EXCEPTION);
     HTMLMediaElement& element = MediaElement();
     uma_helper_ = MakeGarbageCollected<MockAutoplayUmaHelper>(&element);
     element.autoplay_policy_->autoplay_uma_helper_ = uma_helper_;

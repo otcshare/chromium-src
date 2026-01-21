@@ -5,12 +5,10 @@
 #import "ios/chrome/credential_provider_extension/ui/credential_list_global_header_view.h"
 
 #import "ios/chrome/common/app_group/app_group_constants.h"
+#import "ios/chrome/common/app_group/app_group_utils.h"
 #import "ios/chrome/common/credential_provider/constants.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/credential_provider_extension/generated_localized_strings.h"
 
 namespace {
 
@@ -36,7 +34,7 @@ const CGFloat kBottomSpacing = 20;
 }
 
 - (instancetype)initWithReuseIdentifier:(NSString*)reuseIdentifier {
-  if (self = [super initWithReuseIdentifier:reuseIdentifier]) {
+  if ((self = [super initWithReuseIdentifier:reuseIdentifier])) {
     _headerTextLabel = [[UILabel alloc] init];
     _headerTextLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _headerTextLabel.font =
@@ -75,20 +73,13 @@ const CGFloat kBottomSpacing = 20;
 // Returns the header text depending of password sync (represented by the user's
 // email not being available as used in the sync disclaimer).
 - (NSString*)headerText {
-  NSString* syncingUserEmail = [app_group::GetGroupUserDefaults()
-      stringForKey:AppGroupUserDefaultsCredentialProviderUserEmail()];
+  NSString* syncingUserEmail = app_group::UserDefaultsStringForKey(
+      AppGroupUserDefaultsCredentialProviderUserEmail(),
+      /*default_value=*/@"");
 
-  BOOL passwordSyncOn = syncingUserEmail != nil;
-
-  if (passwordSyncOn) {
-    return NSLocalizedString(
-        @"IDS_IOS_CREDENTIAL_PROVIDER_CREDENTIAL_LIST_BRANDED_HEADER_SYNC",
-        @"The information provided in the header of password list.");
-  } else {
-    return NSLocalizedString(
-        @"IDS_IOS_CREDENTIAL_PROVIDER_CREDENTIAL_LIST_BRANDED_HEADER_NO_SYNC",
-        @"The information provided in the header of password list.");
-  }
+  return syncingUserEmail.length
+             ? CredentialProviderCredentialListBrandedHeaderSyncString()
+             : CredentialProviderCredentialListBrandedHeaderNoSyncString();
 }
 
 @end

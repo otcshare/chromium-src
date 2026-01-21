@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_NOTIFICATIONS_ECHO_DIALOG_VIEW_H_
 #define CHROME_BROWSER_ASH_NOTIFICATIONS_ECHO_DIALOG_VIEW_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -28,9 +28,9 @@ class EchoDialogListener;
 // extension is not allowed by policy to redeem offers, the dialog informs user
 // about this.
 class EchoDialogView : public views::DialogDelegateView {
- public:
-  METADATA_HEADER(EchoDialogView);
+  METADATA_HEADER(EchoDialogView, views::DialogDelegateView)
 
+ public:
   struct Params {
     bool echo_enabled = false;
     std::u16string service_name;

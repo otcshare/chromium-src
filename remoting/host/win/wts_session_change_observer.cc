@@ -5,10 +5,11 @@
 #include "remoting/host/win/wts_session_change_observer.h"
 
 #include <windows.h>
+
 #include <winuser.h>
 #include <wtsapi32.h>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/sequence_checker.h"
 

@@ -6,12 +6,12 @@
 #define CONTENT_BROWSER_WEBAUTH_VIRTUAL_DISCOVERY_H_
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "device/fido/fido_device_discovery.h"
-#include "device/fido/fido_transport_protocol.h"
+#include "device/fido/public/fido_transport_protocol.h"
 
 namespace device {
 class VirtualFidoDevice;
@@ -21,9 +21,7 @@ namespace content {
 
 // A fully automated FidoDeviceDiscovery implementation, which is disconnected
 // from the real world, and discovers VirtualFidoDevice instances.
-class VirtualFidoDiscovery
-    : public ::device::FidoDeviceDiscovery,
-      public base::SupportsWeakPtr<VirtualFidoDiscovery> {
+class VirtualFidoDiscovery final : public ::device::FidoDeviceDiscovery {
  public:
   explicit VirtualFidoDiscovery(::device::FidoTransportProtocol transport);
 
@@ -34,7 +32,7 @@ class VirtualFidoDiscovery
   ~VirtualFidoDiscovery() override;
 
   void AddVirtualDevice(std::unique_ptr<device::VirtualFidoDevice> device);
-  bool RemoveVirtualDevice(base::StringPiece device_id);
+  bool RemoveVirtualDevice(std::string_view device_id);
 
  protected:
   // FidoDeviceDiscovery:
@@ -43,6 +41,8 @@ class VirtualFidoDiscovery
  private:
   std::vector<std::unique_ptr<device::VirtualFidoDevice>>
       devices_pending_discovery_start_;
+
+  base::WeakPtrFactory<VirtualFidoDiscovery> weak_ptr_factory_{this};
 };
 
 }  // namespace content

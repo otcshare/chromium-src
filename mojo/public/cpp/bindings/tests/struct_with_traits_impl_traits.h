@@ -8,12 +8,12 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "mojo/public/cpp/bindings/tests/struct_with_traits_impl.h"
-#include "mojo/public/interfaces/bindings/tests/struct_with_traits.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/struct_with_traits.test-mojom.h"
 
 namespace mojo {
 
@@ -59,7 +59,7 @@ struct StructTraits<test::StructWithTraitsDataView,
     return value.get_uint64();
   }
 
-  static base::StringPiece f_string(const test::StructWithTraitsImpl& value) {
+  static std::string_view f_string(const test::StructWithTraitsImpl& value) {
     return value.get_string_as_string_piece();
   }
 
@@ -99,13 +99,11 @@ struct StructTraits<test::StructWithUnreachableTraitsDataView,
  public:
   static bool ignore_me(const test::StructWithUnreachableTraitsImpl& input) {
     NOTREACHED();
-    return false;
   }
 
   static bool Read(test::StructWithUnreachableTraitsDataView data,
                    test::StructWithUnreachableTraitsImpl* out) {
     NOTREACHED();
-    return false;
   }
 };
 
@@ -167,8 +165,9 @@ struct UnionTraits<test::UnionWithTraitsDataView,
 
   static test::UnionWithTraitsDataView::Tag GetTag(
       const std::unique_ptr<test::UnionWithTraitsBase>& data) {
-    if (data->type() == test::UnionWithTraitsBase::Type::INT32)
+    if (data->type() == test::UnionWithTraitsBase::Type::INT32) {
       return test::UnionWithTraitsDataView::Tag::kFInt32;
+    }
 
     return test::UnionWithTraitsDataView::Tag::kFStruct;
   }
@@ -198,7 +197,6 @@ struct UnionTraits<test::UnionWithTraitsDataView,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -229,8 +227,9 @@ struct StructTraits<test::StructNestedForceSerializeDataView,
 
   static bool Read(test::StructNestedForceSerializeDataView data,
                    test::StructNestedForceSerializeImpl* out) {
-    if (!data.ReadForce(&out->force()))
+    if (!data.ReadForce(&out->force())) {
       return false;
+    }
     out->set_was_deserialized();
     return true;
   }

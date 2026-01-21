@@ -10,10 +10,7 @@
 #include <set>
 
 #include "chrome/browser/devtools/device/android_device_manager.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/host_port_pair.h"
-#include "services/network/public/mojom/host_resolver.mojom-forward.h"
 
 class TCPDeviceProvider : public AndroidDeviceManager::DeviceProvider {
  public:

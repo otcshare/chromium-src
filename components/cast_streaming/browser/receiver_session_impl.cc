@@ -5,48 +5,60 @@
 #include "components/cast_streaming/browser/receiver_session_impl.h"
 
 #include "base/task/sequenced_task_runner.h"
+#include "components/cast_streaming/browser/cast_message_port_converter.h"
 #include "components/cast_streaming/browser/public/network_context_getter.h"
-#include "components/cast_streaming/browser/receiver_config_conversions.h"
+#include "components/cast_streaming/browser/public/receiver_config.h"
+#include "components/cast_streaming/common/public/features.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/video_decoder_config.h"
+#include "third_party/openscreen/src/cast/streaming/public/receiver_constraints.h"
 
 namespace cast_streaming {
 
 // static
 std::unique_ptr<ReceiverSession> ReceiverSession::Create(
-    std::unique_ptr<ReceiverSession::AVConstraints> av_constraints,
+    ReceiverConfig av_constraints,
     ReceiverSession::MessagePortProvider message_port_provider,
     ReceiverSession::Client* client) {
   return std::make_unique<ReceiverSessionImpl>(
       std::move(av_constraints), std::move(message_port_provider), client);
 }
 
-// static
-std::unique_ptr<ReceiverSession> ReceiverSession::Create(
-    const ReceiverConfig& av_constraints,
-    ReceiverSession::MessagePortProvider message_port_provider,
-    ReceiverSession::Client* client) {
-  return Create(std::make_unique<ReceiverSession::AVConstraints>(
-                    ToOpenscreenConstraints(av_constraints)),
-                std::move(message_port_provider), client);
-}
-
 ReceiverSessionImpl::ReceiverSessionImpl(
-    std::unique_ptr<ReceiverSession::AVConstraints> av_constraints,
+    ReceiverConfig av_constraints,
     ReceiverSession::MessagePortProvider message_port_provider,
     ReceiverSession::Client* client)
     : message_port_provider_(std::move(message_port_provider)),
       av_constraints_(std::move(av_constraints)),
       client_(client),
       weak_factory_(this) {
-  // TODO(crbug.com/1218495): Validate the provided codecs against build flags.
-  DCHECK(av_constraints_);
+  // TODO(crbug.com/40771653): Validate the provided codecs against build flags.
   DCHECK(message_port_provider_);
 }
 
 ReceiverSessionImpl::~ReceiverSessionImpl() = default;
 
 void ReceiverSessionImpl::StartStreamingAsync(
+    mojo::AssociatedRemote<mojom::DemuxerConnector> demuxer_connector) {
+  DCHECK(!IsCastRemotingEnabled());
+  StartStreamingAsyncInternal(std::move(demuxer_connector));
+}
+
+void ReceiverSessionImpl::StartStreamingAsync(
+    mojo::AssociatedRemote<mojom::DemuxerConnector> demuxer_connector,
+    mojo::AssociatedRemote<mojom::RendererController> renderer_controller) {
+  DCHECK(IsCastRemotingEnabled());
+  DCHECK(!renderer_control_config_);
+  external_renderer_controls_ =
+      std::make_unique<RendererControllerImpl>(base::BindOnce(
+          &ReceiverSessionImpl::OnMojoDisconnect, weak_factory_.GetWeakPtr()));
+  renderer_control_config_.emplace(std::move(renderer_controller),
+                                   external_renderer_controls_->Bind());
+
+  StartStreamingAsyncInternal(std::move(demuxer_connector));
+}
+
+void ReceiverSessionImpl::StartStreamingAsyncInternal(
     mojo::AssociatedRemote<mojom::DemuxerConnector> demuxer_connector) {
   DCHECK(HasNetworkContextGetter());
 
@@ -59,19 +71,6 @@ void ReceiverSessionImpl::StartStreamingAsync(
       &ReceiverSessionImpl::OnMojoDisconnect, weak_factory_.GetWeakPtr()));
 }
 
-void ReceiverSessionImpl::StartStreamingAsync(
-    mojo::AssociatedRemote<mojom::DemuxerConnector> demuxer_connector,
-    mojo::AssociatedRemote<mojom::RendererController> renderer_controller) {
-  DCHECK(!renderer_control_config_);
-  external_renderer_controls_ =
-      std::make_unique<RendererControllerImpl>(base::BindOnce(
-          &ReceiverSessionImpl::OnMojoDisconnect, weak_factory_.GetWeakPtr()));
-  renderer_control_config_.emplace(std::move(renderer_controller),
-                                   external_renderer_controls_->Bind());
-
-  StartStreamingAsync(std::move(demuxer_connector));
-}
-
 ReceiverSession::RendererController*
 ReceiverSessionImpl::GetRendererControls() {
   DCHECK(external_renderer_controls_);
@@ -80,17 +79,16 @@ ReceiverSessionImpl::GetRendererControls() {
 
 void ReceiverSessionImpl::OnReceiverEnabled() {
   DVLOG(1) << __func__;
-  DCHECK(message_port_provider_);
   cast_streaming_session_.Start(this, std::move(renderer_control_config_),
                                 std::move(av_constraints_),
-                                std::move(message_port_provider_).Run(),
+                                std::move(message_port_provider_),
                                 base::SequencedTaskRunner::GetCurrentDefault());
 }
 
 void ReceiverSessionImpl::OnSessionInitialization(
     StreamingInitializationInfo initialization_info,
-    absl::optional<mojo::ScopedDataPipeConsumerHandle> audio_pipe_consumer,
-    absl::optional<mojo::ScopedDataPipeConsumerHandle> video_pipe_consumer) {
+    std::optional<mojo::ScopedDataPipeConsumerHandle> audio_pipe_consumer,
+    std::optional<mojo::ScopedDataPipeConsumerHandle> video_pipe_consumer) {
   DVLOG(1) << __func__;
   DCHECK_EQ(!!initialization_info.audio_stream_info, !!audio_pipe_consumer);
   DCHECK_EQ(!!initialization_info.video_stream_info, !!video_pipe_consumer);
@@ -137,7 +135,7 @@ void ReceiverSessionImpl::OnSessionInitialization(
   demuxer_connector_->OnStreamsInitialized(std::move(audio_info),
                                            std::move(video_info));
 
-  InformClientOfConfigChange();
+  PreloadBuffersAndStartPlayback();
 }
 
 void ReceiverSessionImpl::OnAudioBufferReceived(
@@ -165,8 +163,8 @@ void ReceiverSessionImpl::OnSessionReinitializationPending() {
 
 void ReceiverSessionImpl::OnSessionReinitialization(
     StreamingInitializationInfo initialization_info,
-    absl::optional<mojo::ScopedDataPipeConsumerHandle> audio_pipe_consumer,
-    absl::optional<mojo::ScopedDataPipeConsumerHandle> video_pipe_consumer) {
+    std::optional<mojo::ScopedDataPipeConsumerHandle> audio_pipe_consumer,
+    std::optional<mojo::ScopedDataPipeConsumerHandle> video_pipe_consumer) {
   DVLOG(1) << __func__;
   DCHECK(audio_pipe_consumer || video_pipe_consumer);
   DCHECK_EQ(!!audio_pipe_consumer, !!initialization_info.audio_stream_info);
@@ -202,20 +200,7 @@ void ReceiverSessionImpl::OnSessionReinitialization(
     }
   }
 
-  InformClientOfConfigChange();
-}
-
-void ReceiverSessionImpl::InformClientOfConfigChange() {
-  if (client_) {
-    if (audio_demuxer_stream_data_provider_) {
-      client_->OnAudioConfigUpdated(
-          audio_demuxer_stream_data_provider_->config());
-    }
-    if (video_demuxer_stream_data_provider_) {
-      client_->OnVideoConfigUpdated(
-          video_demuxer_stream_data_provider_->config());
-    }
-  }
+  PreloadBuffersAndStartPlayback();
 }
 
 void ReceiverSessionImpl::OnSessionEnded() {
@@ -228,15 +213,44 @@ void ReceiverSessionImpl::OnSessionEnded() {
   // Cast Streaming Session ending was initiated by the receiver component.
   audio_demuxer_stream_data_provider_.reset();
   video_demuxer_stream_data_provider_.reset();
+
+  if (client_) {
+    client_->OnStreamingSessionEnded();
+    // OnSessionEnded may be called multiple times. Avoid using client_ after
+    // OnstreamingSessionEnded has been called, since it may have been
+    // destroyed in the shutdown process.
+    client_ = nullptr;
+  }
+}
+
+void ReceiverSessionImpl::PreloadBuffersAndStartPlayback() {
+  DCHECK(audio_demuxer_stream_data_provider_ ||
+         video_demuxer_stream_data_provider_);
+  DVLOG(1) << __func__;
+
+  if (audio_demuxer_stream_data_provider_) {
+    audio_demuxer_stream_data_provider_->PreloadBuffer(
+        cast_streaming_session_.GetAudioBufferPreloader());
+  }
+
+  if (video_demuxer_stream_data_provider_) {
+    video_demuxer_stream_data_provider_->PreloadBuffer(
+        cast_streaming_session_.GetVideoBufferPreloader());
+  }
 }
 
 void ReceiverSessionImpl::OnMojoDisconnect() {
   DVLOG(1) << __func__;
 
-  // Close the underlying connection.
+  // Close the underlying connection. This should only occur if a mojo
+  // disconnection occurs very early in the initialization of this component -
+  // specifically, before the browser and renderer processes have successfully
+  // connected via mojom::DemuxerConnector::EnableReceiver().
   if (message_port_provider_) {
-    av_constraints_ = std::make_unique<ReceiverSession::AVConstraints>();
-    std::move(message_port_provider_).Run().reset();
+    // Create this and immediately delete it to create the associated message
+    // port and delete it without including the MessagePort header.
+    CastMessagePortConverter::Create(std::move(message_port_provider_),
+                                     base::OnceClosure());
   }
 
   // Close the Cast Streaming Session. OnSessionEnded() will be called as part
@@ -263,20 +277,9 @@ bool ReceiverSessionImpl::RendererControllerImpl::IsValid() const {
   return renderer_controls_.is_bound() && renderer_controls_.is_connected();
 }
 
-void ReceiverSessionImpl::RendererControllerImpl::StartPlayingFrom(
-    base::TimeDelta time) {
-  DCHECK(IsValid());
-  renderer_controls_->StartPlayingFrom(time);
-}
-
-void ReceiverSessionImpl::RendererControllerImpl::SetPlaybackRate(
-    double playback_rate) {
-  DCHECK(IsValid());
-  renderer_controls_->SetPlaybackRate(playback_rate);
-}
-
 void ReceiverSessionImpl::RendererControllerImpl::SetVolume(float volume) {
   DCHECK(IsValid());
+
   renderer_controls_->SetVolume(volume);
 }
 

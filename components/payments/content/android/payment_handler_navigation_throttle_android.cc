@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/payments/content/android/jni_headers/PaymentHandlerNavigationThrottle_jni.h"
 
 #include "base/android/jni_android.h"
 #include "components/payments/content/payment_handler_navigation_throttle.h"
 #include "content/public/browser/web_contents.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/payments/content/android/jni_headers/PaymentHandlerNavigationThrottle_jni.h"
+
 namespace payments {
 namespace android {
 // static
-void JNI_PaymentHandlerNavigationThrottle_MarkPaymentHandlerWebContents(
+static void JNI_PaymentHandlerNavigationThrottle_MarkPaymentHandlerWebContents(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jweb_contents) {
+    const base::android::JavaRef<jobject>& jweb_contents) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   if (!web_contents)
@@ -22,3 +24,5 @@ void JNI_PaymentHandlerNavigationThrottle_MarkPaymentHandlerWebContents(
 }
 }  // namespace android
 }  // namespace payments
+
+DEFINE_JNI(PaymentHandlerNavigationThrottle)

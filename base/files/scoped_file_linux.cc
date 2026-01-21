@@ -4,6 +4,8 @@
 
 #include "base/files/scoped_file.h"
 
+#include <dlfcn.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -12,7 +14,6 @@
 #include "base/debug/stack_trace.h"
 #include "base/immediate_crash.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 
 namespace {
 
@@ -63,9 +64,11 @@ void ScopedFDCloseTraits::Release(const ScopedFD& owner, int fd) {
 
 namespace subtle {
 
+#if !defined(COMPONENT_BUILD)
 void EnableFDOwnershipEnforcement(bool enabled) {
   g_is_ownership_enforced = enabled;
 }
+#endif  // !defined(COMPONENT_BUILD)
 
 void ResetFDOwnership() {
   std::fill(g_is_fd_owned.begin(), g_is_fd_owned.end(), false);
@@ -79,14 +82,35 @@ bool IsFDOwned(int fd) {
 
 }  // namespace base
 
-extern "C" {
+#if !defined(COMPONENT_BUILD)
+using LibcCloseFuncPtr = int (*)(int);
 
-int __close(int);
-
-__attribute__((visibility("default"), noinline)) int close(int fd) {
-  if (base::IsFDOwned(fd) && g_is_ownership_enforced)
-    CrashOnFdOwnershipViolation();
-  return __close(fd);
+// Load the libc close symbol to forward to from the close wrapper.
+LibcCloseFuncPtr LoadCloseSymbol() {
+#if defined(THREAD_SANITIZER)
+  // If TSAN is enabled use __interceptor___close first to make sure the TSAN
+  // wrapper gets called.
+  return reinterpret_cast<LibcCloseFuncPtr>(
+      dlsym(RTLD_DEFAULT, "__interceptor___close"));
+#else
+  return reinterpret_cast<LibcCloseFuncPtr>(dlsym(RTLD_NEXT, "close"));
+#endif
 }
 
-}  // extern "C"
+extern "C" {
+
+NO_SANITIZE("cfi-icall")
+__attribute__((visibility("default"), noinline)) int close(int fd) {
+  static LibcCloseFuncPtr libc_close = LoadCloseSymbol();
+  if (base::IsFDOwned(fd) && g_is_ownership_enforced) {
+    CrashOnFdOwnershipViolation();
+  }
+  if (libc_close == nullptr) {
+    RAW_LOG(ERROR, "close symbol missing\n");
+    base::ImmediateCrash();
+  }
+  return libc_close(fd);
+}
+
+}       // extern "C"
+#endif  // !defined(COMPONENT_BUILD)

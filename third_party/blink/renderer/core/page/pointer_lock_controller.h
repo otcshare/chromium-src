@@ -26,7 +26,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_POINTER_LOCK_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_POINTER_LOCK_CONTROLLER_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_context.mojom-blink.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_result.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -59,10 +58,9 @@ class CORE_EXPORT PointerLockController final
       base::OnceCallback<void(mojom::blink::PointerLockResult)>;
   bool RequestPointerLock(Element* target, ResultCallback callback);
 
-  ScriptPromise RequestPointerLock(ScriptPromiseResolver* resolver,
-                                   Element* target,
-                                   ExceptionState& exception_state,
-                                   const PointerLockOptions* options = nullptr);
+  void RequestPointerLock(ScriptPromiseResolver<IDLUndefined>* resolver,
+                          Element* target,
+                          const PointerLockOptions* options = nullptr);
   void ExitPointerLock();
   void ElementRemoved(Element*);
   void DocumentDetached(Document*);
@@ -103,13 +101,11 @@ class CORE_EXPORT PointerLockController final
                      bool unadjusted_movement_requested,
                      mojom::blink::PointerLockResult result);
 
-  static void ProcessResultScriptPromise(
-      ScriptPromiseResolver* resolver,
+  static void ProcessResultPromise(
+      ScriptPromiseResolver<IDLUndefined>* resolver,
       mojom::blink::PointerLockResult result);
   static DOMException* ConvertResultToException(
       mojom::blink::PointerLockResult result);
-  static void RejectIfPromiseEnabled(ScriptPromiseResolver* resolver,
-                                     DOMException* exception);
 
   Member<Page> page_;
   bool lock_pending_;

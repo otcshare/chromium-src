@@ -4,32 +4,33 @@
 
 #include "chrome/browser/updater/scheduler.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/task/task_traits.h"
-#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 
 namespace updater {
 
 namespace {
 
-void RunAndReschedule() {
-  DoPeriodicTasks(base::BindOnce([]() {
-    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(&RunAndReschedule), base::Hours(5));
-  }));
+void RunAndReschedule(base::RepeatingClosure prompt) {
+  DoPeriodicTasks(
+      prompt,
+      base::BindOnce(
+          [](base::RepeatingClosure prompt) {
+            base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+                FROM_HERE, base::BindOnce(&RunAndReschedule, prompt),
+                base::Hours(5));
+          },
+          prompt));
 }
 
 }  // namespace
 
-void SchedulePeriodicTasks() {
-  base::ThreadPool::CreateSequencedTaskRunner(
-      {base::TaskPriority::BEST_EFFORT, base::MayBlock(),
-       base::WithBaseSyncPrimitives(),
-       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})
-      ->PostDelayedTask(FROM_HERE, base::BindOnce(&RunAndReschedule),
-                        base::Minutes(5));
+void SchedulePeriodicTasks(base::RepeatingClosure prompt) {
+  // Delay a little bit to get out of the way of browser startup.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(&RunAndReschedule, prompt), base::Seconds(19));
 }
 
 }  // namespace updater

@@ -2,19 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var utils = require('utils');
-var internalAPI = getInternalApi('platformKeysInternal');
-var keyModule = require('platformKeys.Key');
-var getSpki = keyModule.getSpki;
-var KeyUsage = keyModule.KeyUsage;
+const utils = require('utils');
+const internalAPI = getInternalApi('platformKeysInternal');
+const keyModule = require('platformKeys.Key');
+const getKeyIdentifier = keyModule.getKeyIdentifier;
+const KeyUsage = keyModule.KeyUsage;
 
-var normalizeAlgorithm =
+const normalizeAlgorithm =
     requireNative('platform_keys_natives').NormalizeAlgorithm;
 
 // This error is thrown by the internal and public API's token functions and
-// must be rethrown by this custom binding. Keep this in sync with the C++ part
+// must be re-thrown by this custom binding. Keep this in sync with the C++ part
 // of this API.
-var errorInvalidToken = 'The token is not valid.';
+const errorInvalidToken = 'The token is not valid.';
 
 // The following errors are specified in WebCrypto.
 // TODO(pneubeck): These should be DOMExceptions.
@@ -24,10 +24,6 @@ function CreateNotSupportedError() {
 
 function CreateInvalidAccessError() {
   return new Error('The requested operation is not valid for the provided key');
-}
-
-function CreateDataError() {
-  return new Error('Data provided to an operation does not meet requirements');
 }
 
 function CreateSyntaxError() {
@@ -42,8 +38,8 @@ function CreateOperationError() {
 // returns true.
 function catchInvalidTokenError(reject) {
   if (bindingUtil.hasLastError() &&
-      chrome.runtime.lastError.message === errorInvalidToken) {
-    var error = chrome.runtime.lastError;
+      bindingUtil.getLastErrorMessage() === errorInvalidToken) {
+    const error = chrome.runtime.lastError;
     bindingUtil.clearLastError();
     reject(error);
     return true;
@@ -81,12 +77,13 @@ function SubtleCryptoImpl(tokenId, softwareBacked) {
 $Object.setPrototypeOf(SubtleCryptoImpl.prototype, null);
 
 SubtleCryptoImpl.prototype.sign = function(algorithm, key, dataView) {
-  var subtleCrypto = this;
+  const subtleCrypto = this;
   return new Promise(function(resolve, reject) {
-    if (key.type !== 'private' || key.usages.indexOf(KeyUsage.sign) === -1)
+    if (key.type !== 'private' || key.usages.indexOf(KeyUsage.sign) === -1) {
       throw CreateInvalidAccessError();
+    }
 
-    var normalizedAlgorithmParameters = normalizeAlgorithm(algorithm, 'Sign');
+    const normalizedAlgorithmParameters = normalizeAlgorithm(algorithm, 'Sign');
     if (!normalizedAlgorithmParameters) {
       // TODO(pneubeck): It's not clear from the WebCrypto spec which error to
       // throw here.
@@ -102,8 +99,8 @@ SubtleCryptoImpl.prototype.sign = function(algorithm, key, dataView) {
       throw CreateNotSupportedError();
     }
 
-    var algorithmName = normalizedAlgorithmParameters.name;
-    var hashAlgorithmName;
+    const algorithmName = normalizedAlgorithmParameters.name;
+    let hashAlgorithmName;
     if (algorithmName === 'RSASSA-PKCS1-v1_5') {
       // The hash algorithm when signing with RSASSA-PKCS1-v1_5 is specified at
       // key generation in RsaHashedKeyGenParameters. For more information about
@@ -118,13 +115,15 @@ SubtleCryptoImpl.prototype.sign = function(algorithm, key, dataView) {
     }
     // Create an ArrayBuffer that equals the dataView. Note that dataView.buffer
     // might contain more data than dataView.
-    var data = dataView.buffer.slice(dataView.byteOffset,
-                                     dataView.byteOffset + dataView.byteLength);
+    const data = dataView.buffer.slice(
+        dataView.byteOffset, dataView.byteOffset + dataView.byteLength);
     internalAPI.sign(
-        subtleCrypto.tokenId, getSpki(key), normalizedAlgorithmParameters.name,
-        hashAlgorithmName, data, function(signature) {
-          if (catchInvalidTokenError(reject))
+        subtleCrypto.tokenId, getKeyIdentifier(key),
+        normalizedAlgorithmParameters.name, hashAlgorithmName, data,
+        function(signature) {
+          if (catchInvalidTokenError(reject)) {
             return;
+          }
           if (bindingUtil.hasLastError()) {
             bindingUtil.clearLastError();
             reject(CreateOperationError());
@@ -138,14 +137,18 @@ SubtleCryptoImpl.prototype.sign = function(algorithm, key, dataView) {
 SubtleCryptoImpl.prototype.exportKey = function(format, key) {
   return new Promise(function(resolve, reject) {
     if (format === 'pkcs8') {
-      // Either key.type is not 'private' or the key is not extractable. In both
-      // cases the error is the same.
+      // The 'pkcs8' format is intended for 'private' keys, which are always
+      // non-extractable in this API. The 'raw' format is intended for 'secret'
+      // keys and could also be handled with |InvalidAccessError|, but is
+      // actually handled with |NotSupportedError| below, for legacy reasons.
       throw CreateInvalidAccessError();
     } else if (format === 'spki') {
-      if (key.type !== 'public')
+      if (key.type !== 'public') {
         throw CreateInvalidAccessError();
-      resolve(getSpki(key));
+      }
+      resolve(getKeyIdentifier(key));
     } else {
+      // All other exporting formats are unsupported.
       // TODO(pneubeck): It should be possible to export to format 'jwk'.
       throw CreateNotSupportedError();
     }
@@ -162,6 +165,7 @@ utils.expose(SubtleCrypto, SubtleCryptoImpl, {
   ],
 });
 
-// Required for subclassing.
+// Required for sub-classing.
+exports.$set('catchInvalidTokenError', catchInvalidTokenError);
 exports.$set('SubtleCryptoImpl', SubtleCryptoImpl);
 exports.$set('SubtleCrypto', SubtleCrypto);

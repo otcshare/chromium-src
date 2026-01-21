@@ -23,13 +23,6 @@ class FilePath;
 
 namespace installer {
 
-#if !BUILDFLAG(IS_MAC)
-// This is the default name for the initial preferences file used to pre-set
-// values in the user profile at first run.
-const char kInitialPrefs[] = "initial_preferences";
-const char kLegacyInitialPrefs[] = "master_preferences";
-#endif
-
 // The initial preferences is a JSON file with the same entries as the
 // 'Default\Preferences' file. This function parses the distribution
 // section of the preferences file.
@@ -41,7 +34,6 @@ const char kLegacyInitialPrefs[] = "master_preferences";
 //      "create_all_shortcuts": true,
 //      "do_not_launch_chrome": false,
 //      "import_bookmarks_from_file": "c:\\path",
-//      "make_chrome_default": false,
 //      "make_chrome_default_for_user": true,
 //      "ping_delay": 40,
 //      "require_eula": true,
@@ -74,6 +66,16 @@ const char kLegacyInitialPrefs[] = "master_preferences";
 
 class InitialPreferences {
  public:
+#if !BUILDFLAG(IS_MAC)
+  // Find and return initial preferences's file path that is located in `dir`.
+  // It will fallback to the legacy file name if the new one is not available
+  // and `for_read` is set to true.
+  // Only available on Windows, Linux and CrOS. Mac has its own initial
+  // preferences file names which is implemented in
+  // `chrome/browser/mac/initial_prefs.h`.
+  static base::FilePath Path(const base::FilePath& dir, bool for_read = true);
+#endif  // !BUILDFLAG(IS_MAC)
+
   // Construct a initial preferences from the current process' current command
   // line. Equivalent to calling
   // InitialPreferences(*CommandLine::ForCurrentProcess()).
@@ -126,41 +128,83 @@ class InitialPreferences {
   // An empty vector is returned if the first_run_tabs preference is absent.
   std::vector<std::string> GetFirstRunTabs() const;
 
-  // The initial preferences can also contain a regular extensions
-  // preference block. If so, the extensions referenced there will be
-  // installed during the first run experience.
-  // An extension can go in the initial prefs needs just the basic
-  // elements such as:
-  //   1- An extension entry under settings, assigned by the gallery
-  //   2- The "location" : 1 entry
-  //   3- A minimal "manifest" block with key, name, permissions, update url
-  //      and version. The version needs to be lower than the version of
-  //      the extension that is hosted in the gallery.
-  //   4- The "path" entry with the version as last component
-  //   5- The "state" : 1 entry
+  // The initial preferences can also contain a list of extension ids block. If
+  // so, the extensions listed there will be installed during the first run
+  // experience.
   //
-  // The following is an example of a initial pref file that installs
-  // Google XYZ:
+  // An example is the following:
   //
-  //  {
-  //     "extensions": {
-  //        "settings": {
-  //           "ppflmjolhbonpkbkooiamcnenbmbjcbb": {
-  //              "location": 1,
-  //              "manifest": {
-  //                 "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4<rest of key omitted>",
-  //                 "name": "Google XYZ (Installing...)",
-  //                 "permissions": [ "tabs", "http://xyz.google.com/" ],
-  //                 "update_url": "http://fixme.com/fixme/fixme/crx",
-  //                 "version": "0.0"
-  //              },
-  //              "path": "ppflmjolhbonpkbkooiamcnenbmbjcbb\\0.0",
-  //              "state": 1
-  //           }
-  //        }
+  // {
+  //   "initial_extensions": {
+  //     "provider_name": "ABCXYZ Provider",
+  //     "list": [
+  //        "ppflmjolhbonpkbkooiamcnenbmbjcbb"
+  //      ]
+  //   }
+  // }
+  std::string GetInitialExtensionsProviderName() const;
+  const base::Value::List* GetInitialExtensionsList() const;
+
+  // The initial preferences file can include a bookmarks block that gets
+  // imported on the first run. This block contains bookmark and folder nodes
+  // that get recursively visited and imported.
+  //
+  // Bookmark nodes must have 'name', 'type' (set to 'url') and 'url' fields.
+  // Nodes can optionally contain 'icon_data_url' with base64 encoded favicon
+  // data URL that is parsed and shown until the user visits the bookmark's url
+  // and loads a live, fresh version.
+  // If not including 'icon_data_url', or it is not in correctly encoded,
+  // default favicon is shown.
+  //
+  // Folder nodes must have 'name', 'type' (set to 'folder') and 'children'
+  // fields.
+  //
+  // Example block:
+  // {
+  //   "bookmarks": {
+  //     "first_run_bookmarks": {
+  //       "children": [
+  //         {
+  //           "name": "ABC",
+  //           "type": "url",
+  //           "url": "https://google.com",
+  //           "icon_data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEU..."
+  //         },
+  //         {
+  //           "name": "XYZ",
+  //           "type": "url",
+  //           "url": "https://facebook.com"
+  //         },
+  //         {
+  //           "name": "Folder 1",
+  //           "type": "folder",
+  //           "children": [
+  //             {
+  //               "name": "ABC",
+  //               "type": "url",
+  //               "url": "https://google.com"
+  //             },
+  //             {
+  //               "name": "Folder 2",
+  //               "type": "folder",
+  //               "children": [
+  //                 {
+  //                   "name": "ABC",
+  //                   "type": "url",
+  //                   "url": "https://google.com"
+  //                 }
+  //               ]
+  //             }
+  //           ]
+  //         }
+  //       ]
   //     }
-  //  }
-  bool GetExtensionsBlock(const base::Value::Dict*& extensions) const;
+  //   }
+  // }
+  //
+  // The return value can be a nullptr if this dict is not specified in the
+  // initial preferences file.
+  const base::Value::Dict* GetBookmarksBlock() const;
 
   // Returns the compressed variations seed entry from the initial prefs.
   std::string GetCompressedVariationsSeed();
@@ -200,7 +244,7 @@ class InitialPreferences {
   // copied over to profile preferences.
   std::string ExtractPrefString(const std::string& name);
 
-  absl::optional<base::Value::Dict> initial_dictionary_;
+  std::optional<base::Value::Dict> initial_dictionary_;
   raw_ptr<base::Value::Dict> distribution_ = nullptr;
   bool preferences_read_from_file_ = false;
 };

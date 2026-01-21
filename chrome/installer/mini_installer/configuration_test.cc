@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/environment.h"
 #include "base/test/test_reg_util_win.h"
 #include "base/win/registry.h"
@@ -39,7 +40,7 @@ class ScopedGoogleUpdateIsMachine {
 class TestConfiguration : public Configuration {
  public:
   explicit TestConfiguration(const wchar_t* command_line) {
-    EXPECT_TRUE(Initialize(::GetModuleHandle(nullptr)));
+    EXPECT_TRUE(Initialize());
     EXPECT_TRUE(ParseCommandLine(command_line));
   }
 
@@ -92,8 +93,9 @@ TEST_F(MiniInstallerConfigurationTest, CommandLine) {
       L"spam.exe --foo",
   };
   for (size_t i = 0; i < _countof(kCommandLines); ++i) {
-    EXPECT_TRUE(std::wstring(kCommandLines[i]) ==
-                TestConfiguration(kCommandLines[i]).command_line());
+    EXPECT_TRUE(
+        std::wstring(UNSAFE_TODO(kCommandLines[i])) ==
+        TestConfiguration(UNSAFE_TODO(kCommandLines[i])).command_line());
   }
 }
 

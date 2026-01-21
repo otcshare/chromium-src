@@ -4,24 +4,29 @@
 
 #include "chrome/browser/reading_list/android/reading_list_manager_impl.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/guid.h"
+#include "base/location.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/simple_test_clock.h"
+#include "base/uuid.h"
 #include "chrome/browser/reading_list/android/reading_list_manager.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
 #include "components/reading_list/core/fake_reading_list_model_storage.h"
 #include "components/reading_list/core/reading_list_model_impl.h"
+#include "components/sync/base/storage_type.h"
+#include "components/sync/model/wipe_model_upon_sync_disabled_behavior.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using BookmarkNode = bookmarks::BookmarkNode;
 
-namespace {
+namespace reading_list {
 
 constexpr char kURL[] = "https://www.example.com";
 constexpr char kURL1[] = "https://www.anotherexample.com";
@@ -63,10 +68,13 @@ class ReadingListManagerImplTest : public testing::Test {
     base::WeakPtr<FakeReadingListModelStorage> storage_ptr =
         storage->AsWeakPtr();
 
-    reading_list_model_ =
-        std::make_unique<ReadingListModelImpl>(std::move(storage), &clock_);
-    manager_ =
-        std::make_unique<ReadingListManagerImpl>(reading_list_model_.get());
+    reading_list_model_ = std::make_unique<ReadingListModelImpl>(
+        std::move(storage), syncer::StorageType::kUnspecified,
+        syncer::WipeModelUponSyncDisabledBehavior::kNever, &clock_);
+    manager_ = std::make_unique<ReadingListManagerImpl>(
+        reading_list_model_.get(),
+        base::BindRepeating([](int64_t* id) { return (*id)++; },
+                            base::Owned(std::make_unique<int64_t>(0))));
     manager_->AddObserver(observer());
 
     return storage_ptr;
@@ -118,9 +126,10 @@ TEST_F(ReadingListManagerImplTest, Load) {
   ASSERT_FALSE(manager()->IsLoaded());
 
   // Mimic the completion of storage loading with one initial entry.
-  std::vector<ReadingListEntry> entries;
+  std::vector<scoped_refptr<ReadingListEntry>> entries;
   GURL url(kURL);
-  entries.emplace_back(url, kTitle, clock()->Now());
+  entries.push_back(
+      base::MakeRefCounted<ReadingListEntry>(url, kTitle, clock()->Now()));
   ASSERT_TRUE(fake_storage->TriggerLoadCompletion(std::move(entries)));
   EXPECT_TRUE(manager()->IsLoaded());
 
@@ -161,6 +170,23 @@ TEST_F(ReadingListManagerImplTest, AddGetDelete) {
   EXPECT_TRUE(manager()->GetRoot()->children().empty());
 }
 
+TEST_F(ReadingListManagerImplTest, DeleteAllEntries) {
+  // Adds a node.
+  GURL url(kURL);
+  Add(url, kTitle);
+  EXPECT_EQ(1u, manager()->size());
+  EXPECT_EQ(1u, manager()->unread_size());
+  EXPECT_EQ(1u, manager()->GetRoot()->children().size())
+      << "The reading list node should be the child of the root.";
+
+  EXPECT_CALL(*observer(), ReadingListChanged()).RetiresOnSaturation();
+  // Deletes the node.
+  manager()->DeleteAll();
+  EXPECT_EQ(0u, manager()->size());
+  EXPECT_EQ(0u, manager()->unread_size());
+  EXPECT_TRUE(manager()->GetRoot()->children().empty());
+}
+
 // Verifies GetNodeByID() and IsReadingListBookmark() works correctly.
 TEST_F(ReadingListManagerImplTest, GetNodeByIDIsReadingListBookmark) {
   GURL url(kURL);
@@ -182,7 +208,7 @@ TEST_F(ReadingListManagerImplTest, GetNodeByIDIsReadingListBookmark) {
 
   // Node with the same URL but not in the tree.
   auto node_same_url =
-      std::make_unique<BookmarkNode>(0, base::GUID::GenerateRandomV4(), url);
+      std::make_unique<BookmarkNode>(0, base::Uuid::GenerateRandomV4(), url);
   EXPECT_FALSE(manager()->IsReadingListBookmark(node_same_url.get()));
 }
 
@@ -302,7 +328,7 @@ TEST_F(ReadingListManagerImplTest, ReadStatus) {
 
   // Node not in the reading list should return false.
   auto other_node =
-      std::make_unique<BookmarkNode>(0, base::GUID::GenerateRandomV4(), url);
+      std::make_unique<BookmarkNode>(0, base::Uuid::GenerateRandomV4(), url);
   EXPECT_FALSE(manager()->GetReadStatus(node));
 
   // Root node should return false.
@@ -314,9 +340,10 @@ TEST_F(ReadingListManagerImplTest, ReadStatus) {
 TEST_F(ReadingListManagerImplTest, ReadingListDidAddEntry) {
   GURL url(kURL);
   EXPECT_CALL(*observer(), ReadingListChanged()).RetiresOnSaturation();
-  reading_list_model()->AddOrReplaceEntry(
-      url, kTitle, reading_list::ADDED_VIA_SYNC,
-      /*estimated_read_time=*/base::TimeDelta());
+  reading_list_model()->AddOrReplaceEntry(url, kTitle,
+                                          reading_list::ADDED_VIA_SYNC,
+                                          /*estimated_read_time=*/std::nullopt,
+                                          /*creation_time=*/std::nullopt);
 
   const auto* node = manager()->Get(url);
   EXPECT_TRUE(node);
@@ -337,7 +364,7 @@ TEST_F(ReadingListManagerImplTest, ReadingListWillRemoveEntry) {
 
   // Removes it from |reading_list_model_|.
   EXPECT_CALL(*observer(), ReadingListChanged()).RetiresOnSaturation();
-  reading_list_model()->RemoveEntryByURL(url);
+  reading_list_model()->RemoveEntryByURL(url, FROM_HERE);
   node = manager()->Get(url);
   EXPECT_FALSE(node);
   EXPECT_EQ(0u, manager()->size());
@@ -345,7 +372,7 @@ TEST_F(ReadingListManagerImplTest, ReadingListWillRemoveEntry) {
 
 // Verifies the bookmark node is updated when sync or other source updates the
 // reading list entry from |reading_list_model_|.
-TEST_F(ReadingListManagerImplTest, ReadingListWillMoveEntry) {
+TEST_F(ReadingListManagerImplTest, ReadingListWillUpateEntry) {
   GURL url(kURL);
 
   // Adds a node.
@@ -357,4 +384,19 @@ TEST_F(ReadingListManagerImplTest, ReadingListWillMoveEntry) {
   EXPECT_TRUE(manager()->GetReadStatus(node));
 }
 
-}  // namespace
+TEST_F(ReadingListManagerImplTest, EmptyBatchUpdatesDontTriggerObserver) {
+  // Batch updates that contain an actual write to the model should trigger
+  // the observer.
+  EXPECT_CALL(*observer(), ReadingListChanged());
+  std::unique_ptr<ReadingListModel::ScopedReadingListBatchUpdate> update =
+      reading_list_model()->BeginBatchUpdates();
+  manager()->Add(GURL("https://google.com"), "google");
+  update.reset();
+
+  // Empty batch updates shouldn't trigger the observer.
+  EXPECT_CALL(*observer(), ReadingListChanged()).Times(0);
+  update = reading_list_model()->BeginBatchUpdates();
+  update.reset();
+}
+
+}  // namespace reading_list

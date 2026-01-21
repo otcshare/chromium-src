@@ -4,24 +4,21 @@
 
 #include "chrome/browser/ash/net/system_proxy_manager.h"
 
+#include <algorithm>
 #include <string>
 
-#include "ash/components/arc/arc_prefs.h"
 #include "ash/constants/ash_features.h"
-#include "base/bind.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/notifications/request_system_proxy_credentials_view.h"
 #include "chrome/browser/ash/notifications/system_proxy_notification.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/system_proxy/system_proxy_client.h"
@@ -31,6 +28,7 @@
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/proxy/proxy_config_service_impl.h"
 #include "chromeos/ash/components/network/proxy/ui_proxy_config_service.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -45,7 +43,6 @@
 #include "net/http/http_util.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "ui/aura/window.h"
-#include "ui/gfx/native_widget_types.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -68,7 +65,8 @@ class SystemProxyLoginHandler : public content::LoginDelegate {
   void AuthenticateWithCredentials(
       const std::string& username,
       const std::string& password,
-      LoginAuthRequiredCallback auth_required_callback) {
+      content::LoginDelegate::LoginAuthRequiredCallback
+          auth_required_callback) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&SystemProxyLoginHandler::InvokeWithCredentials,
@@ -79,9 +77,10 @@ class SystemProxyLoginHandler : public content::LoginDelegate {
  private:
   void InvokeWithCredentials(const std::string& username,
                              const std::string& password,
-                             LoginAuthRequiredCallback auth_required_callback) {
+                             content::LoginDelegate::LoginAuthRequiredCallback
+                                 auth_required_callback) {
     std::move(auth_required_callback)
-        .Run(absl::make_optional<net::AuthCredentials>(
+        .Run(std::make_optional<net::AuthCredentials>(
             base::UTF8ToUTF16(username), base::UTF8ToUTF16(password)));
   }
 
@@ -471,7 +470,7 @@ bool SystemProxyManager::CanUsePolicyCredentials(
     return false;
   }
   if (!LoginState::IsInitialized() ||
-      (!LoginState::Get()->IsPublicSessionUser() &&
+      (!LoginState::Get()->IsManagedGuestSessionUser() &&
        !LoginState::Get()->IsKioskSession())) {
     VLOG(1) << "Only kiosk app and MGS can reuse the policy provided proxy "
                "credentials for authentication";
@@ -487,7 +486,8 @@ bool SystemProxyManager::CanUsePolicyCredentials(
     return false;
 
   if (!policy_credentials_auth_schemes_.empty()) {
-    if (!base::Contains(policy_credentials_auth_schemes_, auth_info.scheme)) {
+    if (!std::ranges::contains(policy_credentials_auth_schemes_,
+                               auth_info.scheme)) {
       VLOG(1) << "Auth scheme not allowed by policy";
       return false;
     }
@@ -496,7 +496,7 @@ bool SystemProxyManager::CanUsePolicyCredentials(
 }
 
 std::unique_ptr<content::LoginDelegate> SystemProxyManager::CreateLoginDelegate(
-    LoginAuthRequiredCallback auth_required_callback) {
+    content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
   auto login_delegate = std::make_unique<SystemProxyLoginHandler>();
   login_delegate->AuthenticateWithCredentials(
       system_services_username_, system_services_password_,
@@ -562,7 +562,7 @@ bool SystemProxyManager::IsProxyConfiguredByUserViaExtension() {
   if (!extension_prefs_util_)
     return false;
 
-  std::unique_ptr<extensions::api::settings_private::PrefObject> pref =
+  std::optional<extensions::api::settings_private::PrefObject> pref =
       extension_prefs_util_->GetPref(proxy_config::prefs::kProxy);
   return pref && pref->extension_can_be_disabled &&
          *pref->extension_can_be_disabled;
@@ -649,7 +649,7 @@ void SystemProxyManager::OnAuthenticationRequired(
 
 void SystemProxyManager::LookupProxyAuthCredentialsCallback(
     const system_proxy::ProtectionSpace& protection_space,
-    const absl::optional<net::AuthCredentials>& credentials) {
+    const std::optional<net::AuthCredentials>& credentials) {
   if (!credentials) {
     // Ask the user for credentials
     ShowAuthenticationNotification(protection_space, /*show_error=*/false);

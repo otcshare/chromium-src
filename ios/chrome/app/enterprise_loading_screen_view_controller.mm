@@ -4,15 +4,12 @@
 
 #import "ios/chrome/app/enterprise_loading_screen_view_controller.h"
 
-#import "ios/chrome/browser/ui/first_run/first_run_constants.h"
+#import "ios/chrome/browser/first_run/public/first_run_constants.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/dynamic_type_util.h"
-#import "ios/chrome/grit/ios_chromium_strings.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "ios/chrome/grit/ios_branded_strings.h"
 
 namespace {
 // Space between the loading icon and text.
@@ -38,15 +35,18 @@ constexpr CGFloat kPaddingHeight = 50;
   // Override the accessibility ID defined in LaunchScreenViewController.
   self.view.accessibilityIdentifier =
       first_run::kEnterpriseLoadingScreenAccessibilityIdentifier;
-}
-
-- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
-  [super traitCollectionDidChange:previousTraitCollection];
-
-  // Limit the size of text to avoid truncation.
-  self.loadingLabel.font = PreferredFontForTextStyleWithMaxCategory(
-      UIFontTextStyleBody, self.traitCollection.preferredContentSizeCategory,
-      UIContentSizeCategoryExtraExtraExtraLarge);
+  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
+      @[ UITraitPreferredContentSizeCategory.class ]);
+  __weak EnterpriseLoadScreenViewController* weakSelf = self;
+  UITraitChangeHandler handler = ^(id<UITraitEnvironment> traitEnvironment,
+                                   UITraitCollection* previousCollection) {
+    // Limit the size of text to avoid truncation.
+    weakSelf.loadingLabel.font = PreferredFontForTextStyleWithMaxCategory(
+        UIFontTextStyleBody,
+        weakSelf.traitCollection.preferredContentSizeCategory,
+        UIContentSizeCategoryExtraExtraExtraLarge);
+  };
+  [self registerForTraitChanges:traits withHandler:handler];
 }
 
 #pragma mark - Private

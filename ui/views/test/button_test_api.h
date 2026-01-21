@@ -25,9 +25,10 @@ class ButtonTestApi {
   ButtonTestApi& operator=(const ButtonTestApi&) = delete;
 
   void NotifyClick(const ui::Event& event);
+  void NotifyDefaultMouseClick();
 
  private:
-  raw_ptr<Button, DanglingUntriaged> button_;
+  const raw_ptr<Button, DanglingUntriaged> button_;
 };
 
 }  // namespace test

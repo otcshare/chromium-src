@@ -7,15 +7,15 @@
 
 #include <list>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "base/tracing/trace_time.h"
-#include "services/tracing/public/cpp/perfetto/perfetto_producer.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_writer.h"
 #include "third_party/perfetto/protos/perfetto/trace/chrome/chrome_trace_event.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/trace_packet.pbzero.h"
@@ -29,7 +29,7 @@ inline const std::string& GetString(const std::string& string) {
 
 inline const std::string& GetString(
     const scoped_refptr<base::RefCountedString>& string) {
-  return string->data();
+  return string->as_string();
 }
 }  // namespace internal
 
@@ -43,18 +43,9 @@ class COMPONENT_EXPORT(TRACING_CPP) SystemTraceWriter {
 
   static constexpr size_t kMaxBatchSizeBytes = 1 * 1024 * 1024;  // 1 mB.
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
   SystemTraceWriter(uint32_t target_buffer, TraceType trace_type)
       : trace_type_(trace_type),
         task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {}
-#else
-  SystemTraceWriter(PerfettoProducer* producer,
-                    uint32_t target_buffer,
-                    TraceType trace_type)
-      : trace_writer_(producer->CreateTraceWriter(target_buffer)),
-        trace_type_(trace_type),
-        task_runner_(base::SequencedTaskRunner::GetCurrentDefault()) {}
-#endif
 
   SystemTraceWriter(const SystemTraceWriter&) = delete;
   SystemTraceWriter& operator=(const SystemTraceWriter&) = delete;
@@ -93,8 +84,8 @@ class COMPONENT_EXPORT(TRACING_CPP) SystemTraceWriter {
                    internal::GetString(buffered_data_.front()).size() -
                        current_data_pos_);
       const char* data_start =
-          internal::GetString(buffered_data_.front()).data() +
-          current_data_pos_;
+          UNSAFE_TODO(internal::GetString(buffered_data_.front()).data() +
+                      current_data_pos_);
 
       auto update_packet = [&](perfetto::TraceWriter::TracePacketHandle
                                    trace_packet_handle) {
@@ -120,13 +111,9 @@ class COMPONENT_EXPORT(TRACING_CPP) SystemTraceWriter {
         }
       };
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
       DataSourceType::Trace([&](typename DataSourceType::TraceContext ctx) {
         update_packet(ctx.NewTracePacket());
       });
-#else
-      update_packet(trace_writer_->NewTracePacket());
-#endif
       current_batch_size_ += data_size;
       current_data_pos_ += data_size;
       if (current_data_pos_ >=
@@ -146,19 +133,12 @@ class COMPONENT_EXPORT(TRACING_CPP) SystemTraceWriter {
             FROM_HERE,
             base::BindOnce(&SystemTraceWriter::WriteNextBatch, weak_ptr));
       };
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
       DataSourceType::Trace([&](typename DataSourceType::TraceContext ctx) {
         ctx.Flush(flush_callback);
       });
-#else
-      trace_writer_->Flush(flush_callback);
-#endif
     }
   }
 
-#if !BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-  std::unique_ptr<perfetto::TraceWriter> trace_writer_;
-#endif
   TraceType trace_type_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 

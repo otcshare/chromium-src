@@ -18,9 +18,6 @@
 #include "media/capture/video/fake_video_capture_device_factory.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
-#endif
 
 namespace content {
 
@@ -66,8 +63,8 @@ class WebRtcImageCaptureStressBrowserTest
   void SetUpCommandLine(base::CommandLine* command_line) override {
     UsingRealWebcam_WebRtcWebcamBrowserTest::SetUpCommandLine(command_line);
 
-    ASSERT_FALSE(base::CommandLine::ForCurrentProcess()->HasSwitch(
-        switches::kUseFakeDeviceForMediaStream));
+    ASSERT_FALSE(
+        command_line->HasSwitch(switches::kUseFakeDeviceForMediaStream));
   }
 
   void SetUp() override {
@@ -89,21 +86,12 @@ class WebRtcImageCaptureStressBrowserTest
 
     LookupAndLogNameAndIdOfFirstCamera();
 
-    std::string result =
-        EvalJs(shell(), command, EXECUTE_SCRIPT_USE_MANUAL_REPLY)
-            .ExtractString();
-    DLOG_IF(ERROR, result != "OK") << result;
-    return result == "OK";
+    return ExecJs(shell(), command);
   }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
-
-IN_PROC_BROWSER_TEST_P(WebRtcImageCaptureStressBrowserTest,
-                       MANUAL_Take10Photos) {
-  ASSERT_TRUE(RunImageCaptureTestCase("testTake10PhotosSucceeds()"));
-}
 
 // Tests on real webcam can only run on platforms for which the image capture
 // API has already been implemented.
@@ -111,6 +99,11 @@ IN_PROC_BROWSER_TEST_P(WebRtcImageCaptureStressBrowserTest,
 // competing for a single physical webcam typically causes failures.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
+
+IN_PROC_BROWSER_TEST_P(WebRtcImageCaptureStressBrowserTest,
+                       MANUAL_Take10Photos) {
+  ASSERT_TRUE(RunImageCaptureTestCase("testTake10PhotosSucceeds()"));
+}
 
 const TargetVideoCaptureImplementation
     kTargetVideoCaptureImplementationsForRealWebcam[] = {

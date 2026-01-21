@@ -32,6 +32,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/audio/reverb_accumulation_buffer.h"
 #include "third_party/blink/renderer/platform/audio/reverb_convolver.h"
 #include "third_party/blink/renderer/platform/audio/reverb_input_buffer.h"
@@ -60,7 +61,8 @@ ReverbConvolverStage::ReverbConvolverStage(
 
   if (!direct_mode_) {
     fft_kernel_ = std::make_unique<FFTFrame>(fft_size);
-    fft_kernel_->DoPaddedFFT(impulse_response + stage_offset, stage_length);
+    fft_kernel_->DoPaddedFFT(UNSAFE_TODO(impulse_response + stage_offset),
+                             stage_length);
     // Account for the normalization (if any) of the convolver.  By linearity,
     // we can scale the FFT by the factor instead of the input.  We do it this
     // way so we don't need to create a temporary for the scaled result before
@@ -153,7 +155,8 @@ void ReverbConvolverStage::Process(const float* source,
 
     is_temporary_buffer_safe = frames_to_process <= temporary_buffer_.size();
 
-    pre_delayed_destination = pre_delay_buffer_.Data() + pre_read_write_index_;
+    pre_delayed_destination =
+        UNSAFE_TODO(pre_delay_buffer_.Data() + pre_read_write_index_);
     pre_delayed_source = pre_delayed_destination;
     temporary_buffer = temporary_buffer_.Data();
   } else {
@@ -196,7 +199,8 @@ void ReverbConvolverStage::Process(const float* source,
 
   // Finally copy input to pre-delay.
   if (pre_delay_length_ > 0) {
-    memcpy(pre_delayed_destination, source, sizeof(float) * frames_to_process);
+    UNSAFE_TODO(memcpy(pre_delayed_destination, source,
+                       sizeof(float) * frames_to_process));
     pre_read_write_index_ += frames_to_process;
 
     DCHECK_LE(pre_read_write_index_, pre_delay_length_);

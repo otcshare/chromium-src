@@ -4,18 +4,22 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/test/launcher/unit_test_launcher.h"
 #include "base/test/test_suite.h"
 #include "base/timer/lap_timer.h"
+#include "cc/paint/draw_looper.h"
 #include "cc/paint/paint_op_buffer.h"
 #include "cc/paint/paint_op_buffer_serializer.h"
+#include "cc/paint/paint_op_writer.h"
 #include "cc/paint/paint_shader.h"
 #include "cc/test/test_options_provider.h"
+#include "skia/ext/font_utils.h"
 #include "testing/perf/perf_result_reporter.h"
-#include "third_party/skia/include/core/SkMaskFilter.h"
-#include "third_party/skia/include/effects/SkColorMatrixFilter.h"
-#include "third_party/skia/include/effects/SkDashPathEffect.h"
-#include "third_party/skia/include/effects/SkLayerDrawLooper.h"
+#include "third_party/skia/include/core/SkBlurTypes.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 
 namespace cc {
 namespace {
@@ -32,12 +36,8 @@ class PaintOpPerfTest : public testing::Test {
       : timer_(kNumWarmupRuns,
                base::Milliseconds(kTimeLimitMillis),
                kTimeCheckInterval),
-        serialized_data_(static_cast<char*>(
-            base::AlignedAlloc(kMaxSerializedBufferBytes,
-                               PaintOpBuffer::kPaintOpAlign))),
-        deserialized_data_(static_cast<char*>(
-            base::AlignedAlloc(sizeof(LargestPaintOp),
-                               PaintOpBuffer::kPaintOpAlign))) {}
+        serialized_data_(
+            PaintOpWriter::AllocateAlignedBuffer(kMaxSerializedBufferBytes)) {}
 
   void RunTest(const std::string& name, const PaintOpBuffer& buffer) {
     TestOptionsProvider test_options_provider;
@@ -73,8 +73,8 @@ class PaintOpPerfTest : public testing::Test {
 
       while (true) {
         PaintOp* deserialized_op = PaintOp::Deserialize(
-            to_read, remaining_read_bytes, deserialized_data_.get(),
-            sizeof(LargestPaintOp), &bytes_read,
+            to_read, remaining_read_bytes, deserialized_data_,
+            kLargestPaintOpAlignedSize, &bytes_read,
             test_options_provider.deserialize_options());
         CHECK(deserialized_op);
         deserialized_op->DestroyThis();
@@ -84,7 +84,7 @@ class PaintOpPerfTest : public testing::Test {
           break;
 
         remaining_read_bytes -= bytes_read;
-        to_read += bytes_read;
+        UNSAFE_TODO(to_read += bytes_read);
       }
 
       timer_.NextLap();
@@ -98,7 +98,8 @@ class PaintOpPerfTest : public testing::Test {
  protected:
   base::LapTimer timer_;
   std::unique_ptr<char, base::AlignedFreeDeleter> serialized_data_;
-  std::unique_ptr<char, base::AlignedFreeDeleter> deserialized_data_;
+  alignas(PaintOpBuffer::kPaintOpAlign) char deserialized_data_
+      [kLargestPaintOpAlignedSize];
 };
 
 // Ops that can be memcopied both when serializing and deserializing.
@@ -124,26 +125,23 @@ TEST_F(PaintOpPerfTest, ManyFlagsOps) {
 
   PaintFlags flags;
   SkScalar intervals[] = {1.f, 1.f};
-  flags.setPathEffect(SkDashPathEffect::Make(intervals, 2, 0));
-  flags.setMaskFilter(SkMaskFilter::MakeBlur(
-      SkBlurStyle::kOuter_SkBlurStyle, 4.3));
-  flags.setColorFilter(
-      SkColorMatrixFilter::MakeLightingFilter(SK_ColorYELLOW, SK_ColorGREEN));
+  flags.setPathEffect(PathEffect::MakeDash(intervals, 2, 0));
+  flags.setColorFilter(ColorFilter::MakeLuma());
 
-  SkLayerDrawLooper::Builder looper_builder;
-  looper_builder.addLayer();
-  looper_builder.addLayer(2.3f, 4.5f);
-  SkLayerDrawLooper::LayerInfo layer_info;
-  looper_builder.addLayer(layer_info);
-  flags.setLooper(looper_builder.detach());
+  DrawLooperBuilder looper_builder;
+  looper_builder.AddUnmodifiedContent();
+  looper_builder.AddShadow({2.3f, 4.5f}, 0, SkColors::kBlack, 0);
+  looper_builder.AddUnmodifiedContent();
+  flags.setLooper(looper_builder.Detach());
 
   sk_sp<PaintShader> shader = PaintShader::MakeColor(SkColors::kTransparent);
   flags.setShader(std::move(shader));
 
-  SkPath path;
-  path.addCircle(2, 2, 5);
-  path.addCircle(3, 4, 2);
-  path.addArc(SkRect::MakeXYWH(1, 2, 3, 4), 5, 6);
+  const SkPath path = SkPathBuilder()
+                          .addCircle(2, 2, 5)
+                          .addCircle(3, 4, 2)
+                          .addArc(SkRect::MakeXYWH(1, 2, 3, 4), 5, 6)
+                          .detach();
 
   for (size_t i = 0; i < 100; ++i)
     buffer.push<DrawPathOp>(path, flags);
@@ -154,7 +152,7 @@ TEST_F(PaintOpPerfTest, ManyFlagsOps) {
 TEST_F(PaintOpPerfTest, TextOps) {
   PaintOpBuffer buffer;
 
-  auto typeface = SkTypeface::MakeDefault();
+  auto typeface = skia::DefaultTypeface();
 
   SkFont font;
   font.setTypeface(typeface);
@@ -162,7 +160,7 @@ TEST_F(PaintOpPerfTest, TextOps) {
   SkTextBlobBuilder builder;
   int glyph_count = 5;
   const auto& run = builder.allocRun(font, glyph_count, 1.2f, 2.3f);
-  std::fill(run.glyphs, run.glyphs + glyph_count, 0);
+  std::fill(run.glyphs, UNSAFE_TODO(run.glyphs + glyph_count), 0);
   auto blob = builder.make();
 
   PaintFlags flags;

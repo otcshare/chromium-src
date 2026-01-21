@@ -9,10 +9,9 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "components/policy/core/browser/cloud/user_policy_signin_service_base.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -20,14 +19,13 @@
 
 class AccountId;
 class Profile;
+class ProfileManager;
 
 namespace network {
 class SharedURLLoaderFactory;
 }
 
 namespace policy {
-
-class CloudPolicyClientRegistrationHelper;
 
 class UserPolicySigninService;
 
@@ -78,7 +76,7 @@ class UserPolicySigninService : public UserPolicySigninServiceBase,
       const CoreAccountInfo& account_info) override;
 
   // UserPolicySigninServiceBase implementation:
-  void ShutdownUserCloudPolicyManager() override;
+  void ShutdownCloudPolicyManager() override;
 
   // ProfileAttributesStorage::Observer implementation:
   void OnProfileUserManagementAcceptanceChanged(
@@ -94,17 +92,18 @@ class UserPolicySigninService : public UserPolicySigninServiceBase,
     profile_can_be_managed_for_testing_ = can_be_managed;
   }
 
- private:
   // KeyedService implementation:
   void Shutdown() override;
 
+ private:
   // UserPolicySigninServiceBase implementation:
-  void InitializeUserCloudPolicyManager(
+  void InitializeCloudPolicyManager(
       const AccountId& account_id,
       std::unique_ptr<CloudPolicyClient> client) override;
-  void PrepareForUserCloudPolicyManagerShutdown() override;
-  void ProhibitSignoutIfNeeded() override;
   bool CanApplyPolicies(bool check_for_refresh_token) override;
+  CloudPolicyClient::DeviceDMTokenCallback
+  GetDeviceDMTokenIfAffiliatedCallback() override;
+  std::string GetProfileId() override;
 
   // Helper method that attempts calls |InitializeForSignedInUser| only if
   // |policy_manager| is not-nul. Expects that there is a refresh token for
@@ -121,8 +120,6 @@ class UserPolicySigninService : public UserPolicySigninServiceBase,
   // from the test fixture. This is used to bypass the check on the profile
   // attributes entry.
   bool profile_can_be_managed_for_testing_ = false;
-
-  std::unique_ptr<CloudPolicyClientRegistrationHelper> registration_helper_;
 
   // Parent profile for this service.
   raw_ptr<Profile> profile_;

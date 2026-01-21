@@ -8,9 +8,9 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
@@ -124,7 +124,7 @@ class CacheStorageBlobToDiskCacheTest : public testing::Test {
         /*file_operations=*/nullptr, base::FilePath(),
         (CacheStorageBlobToDiskCache::kBufferSize * 100) /* max bytes */,
         disk_cache::ResetHandling::kNeverReset, nullptr /* net log */,
-        base::DoNothing());
+        /*cache_encryption_delegate=*/nullptr, base::DoNothing());
     // The memory cache runs synchronously.
     EXPECT_EQ(net::OK, backend_result.net_error);
     cache_backend_ = std::move(backend_result.backend);

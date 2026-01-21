@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -113,7 +114,7 @@ size_t AdvanceAndReturnUTF16Pos(const char* utf8_string,
 
   UChar32 wide_char;
   while (*utf8_pos < offset) {
-    U8_NEXT(utf8_string, *utf8_pos, utf8_length, wide_char);
+    UNSAFE_TODO(U8_NEXT(utf8_string, *utf8_pos, utf8_length, wide_char));
     *utf16_pos += (wide_char <= 0xFFFF) ? 1 : 2;
   }
   return *utf16_pos;

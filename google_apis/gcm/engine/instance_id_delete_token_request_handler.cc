@@ -41,7 +41,7 @@ InstanceIDDeleteTokenRequestHandler::InstanceIDDeleteTokenRequestHandler(
 
 InstanceIDDeleteTokenRequestHandler::~InstanceIDDeleteTokenRequestHandler() {}
 
-void InstanceIDDeleteTokenRequestHandler::BuildRequestBody(std::string* body){
+void InstanceIDDeleteTokenRequestHandler::BuildRequestBody(std::string* body) {
   BuildFormEncoding(kInstanceIDKey, instance_id_, body);
   BuildFormEncoding(kSenderKey, authorized_entity_, body);
   BuildFormEncoding(kScopeKey, scope_, body);
@@ -52,17 +52,11 @@ void InstanceIDDeleteTokenRequestHandler::BuildRequestBody(std::string* body){
 UnregistrationRequest::Status
 InstanceIDDeleteTokenRequestHandler::ParseResponse(
     const std::string& response) {
-  if (response.find(kTokenPrefix) == std::string::npos)
+  if (!response.contains(kTokenPrefix)) {
     return UnregistrationRequest::RESPONSE_PARSING_FAILED;
+  }
 
   return UnregistrationRequest::SUCCESS;
-}
-
-void InstanceIDDeleteTokenRequestHandler::ReportUMAs(
-    UnregistrationRequest::Status status) {
-  UMA_HISTOGRAM_ENUMERATION("InstanceID.DeleteToken.RequestStatus",
-                            status,
-                            UnregistrationRequest::UNREGISTRATION_STATUS_COUNT);
 }
 
 }  // namespace gcm

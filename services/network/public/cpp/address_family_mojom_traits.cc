@@ -4,6 +4,8 @@
 
 #include "services/network/public/cpp/address_family_mojom_traits.h"
 
+#include "base/notreached.h"
+
 namespace mojo {
 
 // static
@@ -39,7 +41,6 @@ EnumTraits<network::mojom::AddressFamily, net::AddressFamily>::ToMojom(
       return AddressFamily::IPV6;
   }
   NOTREACHED();
-  return AddressFamily::UNSPECIFIED;
 }
 
 }  // namespace mojo

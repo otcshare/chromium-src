@@ -12,11 +12,10 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/test_simple_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
-#include "gpu/command_buffer/common/activity_flags.h"
+#include "gpu/command_buffer/common/shm_count.h"
 #include "gpu/command_buffer/service/scheduler.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "gpu/command_buffer/service/sync_point_manager.h"
@@ -26,11 +25,19 @@
 #include "gpu/ipc/service/gpu_channel_manager_delegate.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "ui/gl/gl_features.h"
 #include "ui/gl/init/gl_factory.h"
 #include "ui/gl/test/gl_surface_test_support.h"
 #include "url/gurl.h"
 
 namespace gpu {
+namespace {
+GpuPreferences CreateGpuPreferences() {
+  GpuPreferences prefs;
+  prefs.use_passthrough_cmd_decoder = features::UsePassthroughCommandDecoder();
+  return prefs;
+}
+}  // namespace
 
 class TestGpuChannelManagerDelegate : public GpuChannelManagerDelegate {
  public:
@@ -49,8 +56,7 @@ class TestGpuChannelManagerDelegate : public GpuChannelManagerDelegate {
   void DidDestroyChannel(int client_id) override {}
   void DidDestroyAllChannels() override {}
   void DidDestroyOffscreenContext(const GURL& active_url) override {}
-  void DidLoseContext(bool offscreen,
-                      error::ContextLostReason reason,
+  void DidLoseContext(error::ContextLostReason reason,
                       const GURL& active_url) override {}
   void StoreBlobToDisk(const gpu::GpuDiskCacheHandle& handle,
                        const std::string& key,
@@ -58,7 +64,10 @@ class TestGpuChannelManagerDelegate : public GpuChannelManagerDelegate {
   void GetIsolationKey(int client_id,
                        const blink::WebGPUExecutionContextToken& token,
                        GetIsolationKeyCallback cb) override {}
-  void MaybeExitOnContextLost() override { is_exiting_ = true; }
+  void MaybeExitOnContextLost(
+      error::ContextLostReason context_lost_reason) override {
+    is_exiting_ = true;
+  }
   bool IsExiting() const override { return is_exiting_; }
 
   Scheduler* GetGpuScheduler() override { return scheduler_; }
@@ -78,12 +87,17 @@ GpuChannelTestCommon::GpuChannelTestCommon(
           base::trace_event::MemoryDumpManager::CreateInstanceForTesting()),
       sync_point_manager_(new SyncPointManager()),
       shared_image_manager_(new SharedImageManager(false /* thread_safe */)),
-      scheduler_(new Scheduler(sync_point_manager_.get(), GpuPreferences())),
+      scheduler_(new Scheduler(sync_point_manager_.get())),
       channel_manager_delegate_(
           new TestGpuChannelManagerDelegate(scheduler_.get())) {
   // We need GL bindings to actually initialize command buffers.
   if (use_stub_bindings) {
-    display_ = gl::GLSurfaceTestSupport::InitializeOneOffWithStubBindings();
+    if (features::UsePassthroughCommandDecoder()) {
+      display_ =
+          gl::GLSurfaceTestSupport::InitializeOneOffWithNullAngleBindings();
+    } else {
+      display_ = gl::GLSurfaceTestSupport::InitializeOneOffWithStubBindings();
+    }
   } else {
     display_ = gl::GLSurfaceTestSupport::InitializeOneOff();
   }
@@ -93,12 +107,12 @@ GpuChannelTestCommon::GpuChannelTestCommon(
       std::move(enabled_workarounds);
 
   channel_manager_ = std::make_unique<GpuChannelManager>(
-      GpuPreferences(), channel_manager_delegate_.get(), nullptr, /* watchdog */
+      CreateGpuPreferences(), channel_manager_delegate_.get(),
+      nullptr, /* watchdog */
       task_environment_.GetMainThreadTaskRunner(),
       task_environment_.GetMainThreadTaskRunner(), scheduler_.get(),
       sync_point_manager_.get(), shared_image_manager_.get(),
-      nullptr, /* gpu_memory_buffer_factory */
-      std::move(feature_info), GpuProcessActivityFlags(),
+      std::move(feature_info), /*use_shader_cache_count_shm_=*/nullptr,
       gl::init::CreateOffscreenGLSurface(display_, gfx::Size()),
       nullptr /* image_decode_accelerator_worker */);
 }
@@ -115,7 +129,8 @@ GpuChannel* GpuChannelTestCommon::CreateChannel(int32_t client_id,
   uint64_t kClientTracingId = 1;
   GpuChannel* channel = channel_manager()->EstablishChannel(
       base::UnguessableToken::Create(), client_id, kClientTracingId,
-      is_gpu_host);
+      is_gpu_host, /*enable_extra_handles_validation=*/false,
+      gfx::GpuExtraInfo());
   base::ProcessId kProcessId = 1;
   channel->set_client_pid(kProcessId);
   return channel;
@@ -127,7 +142,8 @@ void GpuChannelTestCommon::CreateCommandBuffer(
     int32_t routing_id,
     base::UnsafeSharedMemoryRegion shared_state,
     ContextResult* out_result,
-    Capabilities* out_capabilities) {
+    Capabilities* out_capabilities,
+    GLCapabilities* out_gl_capabilities) {
   base::RunLoop loop;
   auto quit = loop.QuitClosure();
   mojo::PendingAssociatedRemote<mojom::CommandBuffer> remote;
@@ -137,12 +153,14 @@ void GpuChannelTestCommon::CreateCommandBuffer(
   channel.CreateCommandBuffer(
       std::move(init_params), routing_id, std::move(shared_state),
       remote.InitWithNewEndpointAndPassReceiver(), std::move(client),
-      base::BindLambdaForTesting(
-          [&](ContextResult result, const Capabilities& capabilities) {
-            *out_result = result;
-            *out_capabilities = capabilities;
-            quit.Run();
-          }));
+      base::BindLambdaForTesting([&](ContextResult result,
+                                     const Capabilities& capabilities,
+                                     const GLCapabilities& gl_capabilities) {
+        *out_result = result;
+        *out_capabilities = capabilities;
+        *out_gl_capabilities = gl_capabilities;
+        quit.Run();
+      }));
   loop.Run();
 }
 

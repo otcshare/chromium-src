@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "services/network/public/cpp/transferable_directory.h"
+
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
@@ -80,7 +82,6 @@ void TransferableDirectory::OpenForTransfer() {
 
 [[nodiscard]] base::OnceClosure TransferableDirectory::Mount() {
   NOTREACHED() << "Directory transfer not supported on this platform.";
-  return {};
 }
 
 #endif  // BUILDFLAG(IS_DIRECTORY_TRANSFER_REQUIRED)

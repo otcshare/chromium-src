@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "components/reading_list/core/reading_list_model.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/native_theme/os_settings_provider.h"
 
 namespace {
 
@@ -28,14 +29,6 @@ enum class DarkModeStatus {
   kMaxValue = kDark,
 };
 
-bool AnyBrowserWindowHasName() {
-  for (auto* browser : *BrowserList::GetInstance()) {
-    if (!browser->user_title().empty())
-      return true;
-  }
-  return false;
-}
-
 }  // namespace
 
 DesktopPlatformFeaturesMetricsProvider::
@@ -45,11 +38,13 @@ DesktopPlatformFeaturesMetricsProvider::
 
 void DesktopPlatformFeaturesMetricsProvider::ProvideCurrentSessionData(
     metrics::ChromeUserMetricsExtension* uma_proto) {
-  ui::NativeTheme* theme = ui::NativeTheme::GetInstanceForNativeUi();
   DarkModeStatus status = DarkModeStatus::kUnavailable;
-  if (ui::NativeTheme::SystemDarkModeSupported()) {
-    status = theme->ShouldUseDarkColors() ? DarkModeStatus::kDark
-                                          : DarkModeStatus::kLight;
+  if (ui::OsSettingsProvider::Get().DarkColorSchemeAvailable()) {
+    status =
+        (ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
+         ui::NativeTheme::PreferredColorScheme::kDark)
+            ? DarkModeStatus::kDark
+            : DarkModeStatus::kLight;
   }
   UMA_HISTOGRAM_ENUMERATION("Browser.DarkModeStatus", status);
 
@@ -59,13 +54,8 @@ void DesktopPlatformFeaturesMetricsProvider::ProvideCurrentSessionData(
   for (Profile* profile : profiles) {
     ReadingListModel* model =
         ReadingListModelFactory::GetForBrowserContext(profile);
-    if (model && model->loaded()) {
-      UMA_HISTOGRAM_COUNTS_1000("ReadingList.Unread.Count.OnUMAUpload",
-                                model->unread_size());
-      UMA_HISTOGRAM_COUNTS_1000("ReadingList.Read.Count.OnUMAUpload",
-                                model->size() - model->unread_size());
+    if (model) {
+      model->RecordCountMetricsOnUMAUpload();
     }
   }
-
-  UMA_HISTOGRAM_BOOLEAN("Browser.AnyWindowHasName", AnyBrowserWindowHasName());
 }

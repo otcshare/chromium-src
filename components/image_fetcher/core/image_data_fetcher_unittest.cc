@@ -7,8 +7,8 @@
 #include <memory>
 
 #include "base/base64.h"
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -49,18 +49,24 @@ class ImageDataFetcherTest : public testing::Test {
   ImageDataFetcherTest(const ImageDataFetcherTest&) = delete;
   ImageDataFetcherTest& operator=(const ImageDataFetcherTest&) = delete;
 
-  ~ImageDataFetcherTest() override {}
+  ~ImageDataFetcherTest() override = default;
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
-  MOCK_METHOD2(OnImageDataFetched,
-               void(const std::string&, const RequestMetadata&));
+  MOCK_METHOD(void,
+              OnImageDataFetched,
+              (const std::string&, const RequestMetadata&),
+              ());
 
-  MOCK_METHOD2(OnImageDataFetchedFailedRequest,
-               void(const std::string&, const RequestMetadata&));
+  MOCK_METHOD(void,
+              OnImageDataFetchedFailedRequest,
+              (const std::string&, const RequestMetadata&),
+              ());
 
-  MOCK_METHOD2(OnImageDataFetchedMultipleRequests,
-               void(const std::string&, const RequestMetadata&));
+  MOCK_METHOD(void,
+              OnImageDataFetchedMultipleRequests,
+              (const std::string&, const RequestMetadata&),
+              ());
 
  protected:
   base::test::SingleThreadTaskEnvironment task_environment_;

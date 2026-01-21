@@ -29,13 +29,15 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/editing/editing_boundary.h"
 #include "third_party/blink/renderer/core/editing/forward.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_uchar.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace gfx {
 class Point;
+class QuadF;
 class Rect;
+class RectF;
 }  // namespace gfx
 
 namespace blink {
@@ -135,6 +137,9 @@ CORE_EXPORT Position StartOfWordPosition(const Position&,
 CORE_EXPORT PositionInFlatTree
 StartOfWordPosition(const PositionInFlatTree&,
                     WordSide = kNextWordIfOnBoundary);
+CORE_EXPORT Position MiddleOfWordPosition(const Position&, const Position&);
+CORE_EXPORT PositionInFlatTree MiddleOfWordPosition(const PositionInFlatTree&,
+                                                    const PositionInFlatTree&);
 CORE_EXPORT Position EndOfWordPosition(const Position&,
                                        WordSide = kNextWordIfOnBoundary);
 CORE_EXPORT PositionInFlatTree
@@ -149,6 +154,7 @@ CORE_EXPORT PositionInFlatTreeWithAffinity NextWordPosition(
     const PositionInFlatTree&,
     PlatformWordBehavior = PlatformWordBehavior::kWordDontSkipSpaces);
 bool IsWordBreak(UChar);
+bool IsWordBoundary(UChar);
 
 // sentences
 CORE_EXPORT Position StartOfSentencePosition(const Position&);
@@ -220,12 +226,18 @@ CORE_EXPORT bool IsLogicalEndOfLine(const VisiblePositionInFlatTree&);
 CORE_EXPORT VisiblePosition
 StartOfParagraph(const VisiblePosition&,
                  EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+CORE_EXPORT VisiblePosition StartOfParagraphInFlatTree(
+    const VisiblePosition&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
 CORE_EXPORT VisiblePositionInFlatTree
 StartOfParagraph(const VisiblePositionInFlatTree&,
                  EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
 CORE_EXPORT VisiblePosition
 EndOfParagraph(const VisiblePosition&,
                EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+CORE_EXPORT VisiblePosition EndOfParagraphInFlatTree(
+    const VisiblePosition&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
 CORE_EXPORT VisiblePositionInFlatTree
 EndOfParagraph(const VisiblePositionInFlatTree&,
                EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
@@ -273,6 +285,8 @@ CORE_EXPORT bool RendersInDifferentPosition(const Position&, const Position&);
 CORE_EXPORT Position SkipWhitespace(const Position&);
 CORE_EXPORT PositionInFlatTree SkipWhitespace(const PositionInFlatTree&);
 
+template <typename Strategy>
+Vector<gfx::QuadF> ComputeTextBounds(const EphemeralRangeTemplate<Strategy>&);
 CORE_EXPORT gfx::Rect ComputeTextRect(const EphemeralRange&);
 gfx::Rect ComputeTextRect(const EphemeralRangeInFlatTree&);
 gfx::RectF ComputeTextRectF(const EphemeralRange&);

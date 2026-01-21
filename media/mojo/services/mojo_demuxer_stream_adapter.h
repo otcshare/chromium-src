@@ -6,6 +6,7 @@
 #define MEDIA_MOJO_SERVICES_MOJO_DEMUXER_STREAM_ADAPTER_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/memory/weak_ptr.h"
 #include "media/base/audio_decoder_config.h"
@@ -15,7 +16,6 @@
 #include "media/mojo/services/media_mojo_export.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -43,7 +43,7 @@ class MEDIA_MOJO_EXPORT MojoDemuxerStreamAdapter : public DemuxerStream {
   ~MojoDemuxerStreamAdapter() override;
 
   // DemuxerStream implementation.
-  void Read(ReadCB read_cb) override;
+  void Read(uint32_t count, ReadCB read_cb) override;
   AudioDecoderConfig audio_decoder_config() override;
   VideoDecoderConfig video_decoder_config() override;
   Type type() const override;
@@ -53,20 +53,20 @@ class MEDIA_MOJO_EXPORT MojoDemuxerStreamAdapter : public DemuxerStream {
  private:
   void OnStreamReady(Type type,
                      mojo::ScopedDataPipeConsumerHandle consumer_handle,
-                     const absl::optional<AudioDecoderConfig>& audio_config,
-                     const absl::optional<VideoDecoderConfig>& video_config);
+                     const std::optional<AudioDecoderConfig>& audio_config,
+                     const std::optional<VideoDecoderConfig>& video_config);
 
   // The callback from |demuxer_stream_| that a read operation has completed.
   // |read_cb| is a callback from the client who invoked Read() on |this|.
   void OnBufferReady(Status status,
-                     mojom::DecoderBufferPtr buffer,
-                     const absl::optional<AudioDecoderConfig>& audio_config,
-                     const absl::optional<VideoDecoderConfig>& video_config);
+                     std::vector<mojom::DecoderBufferPtr> batch_buffers,
+                     const std::optional<AudioDecoderConfig>& audio_config,
+                     const std::optional<VideoDecoderConfig>& video_config);
 
   void OnBufferRead(scoped_refptr<DecoderBuffer> buffer);
 
-  void UpdateConfig(const absl::optional<AudioDecoderConfig>& audio_config,
-                    const absl::optional<VideoDecoderConfig>& video_config);
+  void UpdateConfig(const std::optional<AudioDecoderConfig>& audio_config,
+                    const std::optional<VideoDecoderConfig>& video_config);
 
   // See constructor for descriptions.
   mojo::Remote<mojom::DemuxerStream> demuxer_stream_;
@@ -83,7 +83,14 @@ class MEDIA_MOJO_EXPORT MojoDemuxerStreamAdapter : public DemuxerStream {
   AudioDecoderConfig audio_config_;
   VideoDecoderConfig video_config_;
 
-  Type type_;
+  Type type_ = Type::UNKNOWN;
+  Status status_ = Status::kOk;
+
+  size_t actual_read_count_ = 0;
+
+  DemuxerStream::DecoderBufferVector buffer_queue_;
+
+  std::vector<mojom::DecoderBufferPtr> batch_buffers_;
 
   std::unique_ptr<MojoDecoderBufferReader> mojo_decoder_buffer_reader_;
 

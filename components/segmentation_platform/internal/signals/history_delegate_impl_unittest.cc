@@ -19,7 +19,6 @@ using ::testing::Return;
 
 base::CancelableTaskTracker::TaskId RunNotFoundCallback(
     const GURL& url,
-    bool want_visits,
     history::HistoryService::QueryURLCallback callback,
     base::CancelableTaskTracker* tracker) {
   history::QueryURLResult result;
@@ -30,7 +29,6 @@ base::CancelableTaskTracker::TaskId RunNotFoundCallback(
 
 base::CancelableTaskTracker::TaskId RunFoundCallback(
     const GURL& url,
-    bool want_visits,
     history::HistoryService::QueryURLCallback callback,
     base::CancelableTaskTracker* tracker) {
   history::QueryURLResult result;
@@ -43,12 +41,12 @@ base::CancelableTaskTracker::TaskId RunFoundCallback(
 
 class MockHistoryService : public history::HistoryService {
  public:
-  MOCK_METHOD4(QueryURL,
-               base::CancelableTaskTracker::TaskId(
-                   const GURL& url,
-                   bool want_visits,
-                   QueryURLCallback callback,
-                   base::CancelableTaskTracker* tracker));
+  MOCK_METHOD(base::CancelableTaskTracker::TaskId,
+              QueryURL,
+              (const GURL& url,
+               QueryURLCallback callback,
+               base::CancelableTaskTracker* tracker),
+              (override));
 };
 
 }  // namespace
@@ -61,7 +59,7 @@ class HistoryDelegateImplTest : public testing::Test {
   void SetUp() override {
     signal_handler_ = std::make_unique<UrlSignalHandler>(nullptr);
     history_delegate_ = std::make_unique<HistoryDelegateImpl>(
-        &history_service_, signal_handler_.get());
+        &history_service_, signal_handler_.get(), /*profile_id*/ "test_id");
   }
 
   void TearDown() override {
@@ -80,15 +78,21 @@ class HistoryDelegateImplTest : public testing::Test {
 
 TEST_F(HistoryDelegateImplTest, FindInHistory) {
   const GURL kUrl1("https://www.url1.com");
-  EXPECT_CALL(history_service(), QueryURL(kUrl1, false, _, _))
+  EXPECT_CALL(history_service(), QueryURL(kUrl1, _, _))
       .WillOnce(&RunNotFoundCallback);
   history_delegate().FindUrlInHistory(
-      kUrl1, base::BindOnce([](bool found) { EXPECT_FALSE(found); }));
+      kUrl1, base::BindOnce([](bool found, const std::string& profile_id) {
+        EXPECT_FALSE(found);
+        EXPECT_EQ(profile_id, "");
+      }));
 
-  EXPECT_CALL(history_service(), QueryURL(kUrl1, false, _, _))
+  EXPECT_CALL(history_service(), QueryURL(kUrl1, _, _))
       .WillOnce(&RunFoundCallback);
   history_delegate().FindUrlInHistory(
-      kUrl1, base::BindOnce([](bool found) { EXPECT_TRUE(found); }));
+      kUrl1, base::BindOnce([](bool found, const std::string& profile_id) {
+        EXPECT_TRUE(found);
+        EXPECT_EQ(profile_id, "test_id");
+      }));
 }
 
 TEST_F(HistoryDelegateImplTest, FastCheck) {

@@ -7,9 +7,11 @@ import './diagnostics_shared.css.js';
 import './ethernet_info.js';
 import './wifi_info.js';
 
+import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {Network, NetworkType} from './network_health_provider.mojom-webui.js';
+import type {Network} from './network_health_provider.mojom-webui.js';
+import {NetworkType} from './network_health_provider.mojom-webui.js';
 import {getTemplate} from './network_info.html.js';
 
 /**
@@ -19,15 +21,15 @@ import {getTemplate} from './network_info.html.js';
  */
 
 export class NetworkInfoElement extends PolymerElement {
-  static get is() {
-    return 'network-info';
+  static get is(): 'network-info' {
+    return 'network-info' as const;
   }
 
-  static get template() {
+  static get template(): HTMLTemplateElement {
     return getTemplate();
   }
 
-  static get properties() {
+  static get properties(): PolymerElementProperties {
     return {
       /** @type {!Network} */
       network: {
@@ -39,22 +41,22 @@ export class NetworkInfoElement extends PolymerElement {
 
   network: Network;
 
-  protected isWifiNetwork_(): boolean {
+  protected isWifiNetwork(): boolean {
     return this.network.type === NetworkType.kWiFi;
   }
 
-  protected isCellularNetwork_(): boolean {
+  protected isCellularNetwork(): boolean {
     return this.network.type === NetworkType.kCellular;
   }
 
-  protected isEthernetNetwork_(): boolean {
+  protected isEthernetNetwork(): boolean {
     return this.network.type === NetworkType.kEthernet;
   }
 }
 
 declare global {
   interface HTMLElementTagNameMap {
-    'network-info': NetworkInfoElement;
+    [NetworkInfoElement.is]: NetworkInfoElement;
   }
 }
 

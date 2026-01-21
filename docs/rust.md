@@ -4,109 +4,121 @@
 
 # Why?
 
-Parsing untrustworthy data is a major source of security bugs, and it's
-therefore against Chromium rules [to do it in the browser process](rule-of-2.md)
-unless you can use a memory-safe language.
+Handling untrustworthy data in non-trivial ways is a major source of security
+bugs, and it's therefore against Chromium's security policies
+[to do it in the Browser or Gpu process](../docs/security/rule-of-2.md) unless
+you are working in a memory-safe language.
 
-Rust provides a cross-platform memory-safe language so that all platforms can
+Rust provides a cross-platform, memory-safe language so that all platforms can
 handle untrustworthy data directly from a privileged process, without the
-performance overheads and complexity of a utility process.
-
-# Guidelines
-
-Rust in Chromium is not production-ready. It is guarded behind a GN flag which
-is off by default.
-
-Rust is only used in //third_party/rust, for crates developed outside of the
-Chromium tree.
+performance overhead and complexity of a utility process.
 
 # Status
 
-The Rust toolchain is still experimental and breaks frequently, but it is
-behind an off-by-default GN argument, so this does not affect our bots or
-developers.
+The Rust toolchain is enabled for and supports all platforms and development
+environments that are supported by the Chromium project. The first milestone
+to include full production-ready support was M119.
 
-We have a working Rust toolchain for Linux x64 and Android targets. We are
-working on support for other platforms.
+Rust can be used anywhere in the Chromium repository (not just `//third_party`)
+subject to [current interop capabilities][interop-rust-doc]. There is no special
+process for introducing Rust. Similar to any code change, OWNERS approval is
+required. Googlers can see go/chrome-rust for more details.
 
-For questions or help, reach out to `rust-dev@chromium.org` or `#rust` on the
-[Chromium Slack](https://www.chromium.org/developers/slack/).
-
-# Building with Rust support
-
-1. Add `enable_rust = true` in your `gn` arguments, via `gn args <outdir>`.
-1. Add `"use_rust": True` to your `.gclient` file in the `"custom vars"`
-   section.
+For questions or help, reach out to
+[`rust-dev@chromium.org`](https://groups.google.com/a/chromium.org/g/rust-dev),
+or [`#rust` channel](https://chromium.slack.com/archives/C01T3EWCJ9Z)
+on the [Chromium Slack](https://www.chromium.org/developers/slack/),
+or (Google-internal, sorry)
+[Chrome Rust chatroom](https://chat.google.com/room/AAAAk1UCFGg?cls=7).
 
 If you use VSCode, we have [additional advice below](#using-vscode).
 
-# Using a third-party Rust library
+# First-party Rust libraries
 
-## Importing a crate from crates.io
+First-party Rust libraries should use the
+[`rust_static_library`](
+https://source.chromium.org/chromium/chromium/src/+/main:build/rust/rust_static_library.gni)
+GN template (not the built-in `rust_library`) to integrate properly into the
+mixed-language Chromium build and get the correct compiler options applied to
+them.
 
-See [//tools/crates/README.md](../tools/crates/README.md) for instructions on
-how to import a third-party library and generate GN build rules for it.
-
-## Third-party review
-
-**Since the Rust toolchain is still experimental, there is no Rust in production
-and we're not ready to consider approving Rust libraries that aren't part of the
-experiment and stabilization of the Rust toolchain.**
-
-All third-party crates need to go through third-party review. See
-[//docs/adding_to_third_party.md](adding_to_third_party.md) for instructions on
-how to have a library reviewed.
-
-## Writing a wrapper for binding generation
-
-Most Rust libraries will need a more C++-friendly API written on top of them in
-order to generate C++ bindings to them. Such wrapper libraries should be written
-in `//third_party/rust/<cratename>/<epoch>/wrapper`.
+Rust libraries that depend on other first-party Rust libraries
+should import APIs using `chromium::import!` from
+[the Chromium prelude library](../build/rust/chromium_prelude/)
+rather than
+[`use some_crate_name::foo`](https://doc.rust-lang.org/reference/items/use-declarations.html).
+This avoids concerns about non-globally-unique crate names.
+This guidance doesn't apply when depending on Rust standard library
+nor when depending on crates from `//third_party/rust`.
 
 See
-[`//third_party/rust/serde_json_lenient/v0_1/wrapper/`](https://source.chromium.org/chromium/chromium/src/+/main:third_party/rust/serde_json_lenient/v0_1/wrapper/)
-for an example.
+[`//docs/rust-ffi.md`](rust/ffi.md)
+for how to interop with Rust code from C/C++.
 
-Rust libraries should use our
-[`rust_static_library`](https://source.chromium.org/chromium/chromium/src/+/main:build/rust/rust_static_library.gni)
-GN template, in place of built-in GN `rust_library`, in order to integrate
-properly into the build and get the correct compiler options applied to them.
+Mapping of Chromium APIs to Rust:
 
-We provide the [CXX](https://cxx.rs) tool for generating C++ bindings for the
-Rust library (or wrapper library). Add any Rust files with a CXX bridge macro to
-the `cxx_bindings` variable in the `rust_static_library` GN rule to have CXX
-generate C++ a header for that file.
+* `gtest` integration is provided by
+[`//testing/rust_gtest_interop`](../testing/rust_gtest_interop/README.md)
+library.
+* [log](https://docs.rs/log) crate has been integrated into `//base` and can be
+  used in place of `LOG(...)` from C++ side.
+    - TODO(https://crbug.com/374023535): Logging may not yet work in component builds
+    - Note that the standard library also includes a helpful
+      [`dbg!`](https://doc.rust-lang.org/std/macro.dbg.html) macro which writes
+      everything about a variable to `stderr`.
 
-# Building on non-Linux platforms
+# Third-party Rust libraries
 
-We only have a working Rust toolchain for Linux and Android at this time. To use
-Rust on other platforms, you will need to provide your own nightly Rust
-toolchain. You can then tell `gn` about it using these `gn` arguments:
+## crates.io
 
-```
-enable_rust=true
-rust_sysroot_absolute="/Users/you/.rustup/toolchains/<toolchain name>"
-rustc_version="<your rustc version>" # add output of rustc -V
-# added_rust_stdlib_libs=[]
-# removed_rust_stdlib_libs=[]
-```
+See
+[`//third_party/rust/README-importing-new-crates.md`](../third_party/rust/README-importing-new-crates.md)
+for instructions on how to import a crate from https://crates.io into Chromium.
 
-The last two arguments are any Rust standard library .rlibs which have been
-added or removed between the version that's distributed for Linux/Android,
-and the version you're using. They should rarely be necessary; if you get errors
-about missing standard libraries then adjust `removed_rust_stdlib_libs`; if
-you get errors about undefined symbols then have a look in your equivalent
-of the `.rustup/toolchains/<toolchain name>/lib/rustlib/<target>/lib`
-directory and add any new libraries which are not listed in
-`//build/rust/std/BUILD.gn` to the `added_rust_stlib_libs` list.
+The crates will get updated semi-automatically through the process described in
+[`../tools/crates/create_update_cl.md`](../tools/crates/create_update_cl.md).
+
+These libraries use the
+[`cargo_crate`](
+https://source.chromium.org/chromium/chromium/src/+/main:build/rust/cargo_crate.gni)
+GN template.
+
+## Other libraries
+
+Third-party Rust libraries that are not distributed through [crates.io](
+https://crates.io) should live outside of `//third_party/rust`.
+Such libraries will typically depend on `//third_party/rust` crates
+and use `//build/rust/*.gni` templates, but there is no other Chromium
+tooling to import such libraries or keep them updated.
+For examples, see `//third_party/crabbyavif` or
+`//third_party/cloud_authenticator`.
+
+# Unstable features
+
+Unstable features are **unsupported** by default in Chromium. Any use of an
+unstable language or library feature should be agreed upon by the Rust toolchain
+team before enabling it.  See
+[`tools/rust/unstable_rust_feature_usage.md`](../tools/rust/unstable_rust_feature_usage.md)
+for more details.
 
 # Using VSCode
 
-1. Ensure you're using the `rust-analyzer` extension for VSCode, rather than
-   earlier forms of Rust support.
-2. Run `gn` with this extra flag: `gn gen out/Release --export-rust-project`.
-3. `ln -s out/Release/rust-project.json rust-project.json`
-4. When you run VSCode, or any other IDE that uses
-   [rust-analyzer](https://rust-analyzer.github.io/) it should detect the
-   `rust-project.json` and use this to give you rich browsing, autocompletion,
-   type annotations etc. for all the Rust within the Chromium codebase.
+This section has been moved to
+[`//docs/rust/dev_experience_tips_and_tricks.md`](rust/dev_experience_tips_and_tricks.md).
+
+# Using cargo
+
+If you are building a throwaway or experimental tool, you might like to use pure
+`cargo` tooling rather than `gn` and `ninja`. Even then, you may choose
+to restrict yourself to the toolchain and crates that are already approved for
+use in Chromium, by
+
+* Using `tools/crates/run_cargo.py` (which will use
+  Chromium's `//third_party/rust-toolchain/bin/cargo`)
+* Configuring `.cargo/config.toml` to ask to use the crates vendored
+  into Chromium's `//third_party/rust/chromium_crates_io`.
+
+An example of how this can work can be found in
+https://crrev.com/c/6320795/5.
+
+[interop-rust-doc]: https://docs.google.com/document/d/1kvgaVMB_isELyDQ4nbMJYWrqrmL3UZI4tDxnyxy9RTE/edit?tab=t.0#heading=h.fpqr6hf3c3j0

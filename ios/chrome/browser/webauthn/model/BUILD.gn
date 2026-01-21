@@ -1,0 +1,110 @@
+# Copyright 2024 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//ios/build/chrome_build.gni")
+
+source_set("model") {
+  sources = [
+    "ios_passkey_model_factory.cc",
+    "ios_passkey_model_factory.h",
+  ]
+  deps = [
+    "//base",
+    "//components/affiliations/core/browser:affiliations",
+    "//components/password_manager/core/browser/affiliation:affiliation_fetching",
+    "//components/password_manager/core/browser/ui",
+    "//components/password_manager/core/browser/ui:credential_ui_entry",
+    "//components/sync/model",
+    "//components/webauthn/core/browser",
+    "//components/webauthn/core/browser:passkey_model",
+    "//ios/chrome/browser/affiliations/model",
+    "//ios/chrome/browser/shared/model/profile",
+    "//ios/chrome/browser/shared/model/profile:profile_keyed_service_factory",
+    "//ios/chrome/browser/sync/model:data_type_store_service_factory",
+    "//ios/web/public",
+  ]
+}
+
+source_set("ios_chrome_passkey_client") {
+  sources = [
+    "ios_chrome_passkey_client.h",
+    "ios_chrome_passkey_client.mm",
+  ]
+  deps = [
+    ":common",
+    "//components/metrics:metrics_pref_names",
+    "//components/password_manager/core/browser",
+    "//components/password_manager/ios",
+    "//components/webauthn/ios",
+    "//components/webauthn/ios:features",
+    "//ios/chrome/browser/credential_provider/model:buildflags",
+    "//ios/chrome/browser/passwords/model",
+    "//ios/chrome/browser/shared/model/application_context",
+    "//ios/chrome/browser/shared/model/browser",
+    "//ios/chrome/browser/shared/model/profile",
+    "//ios/chrome/browser/signin/model",
+    "//ios/chrome/common/credential_provider:passkey_keychain_provider_chrome",
+    "//ios/web/public",
+  ]
+
+  if (ios_enable_credential_provider_extension) {
+    deps += [ "//ios/chrome/browser/credential_provider/model" ]
+  }
+}
+
+source_set("common") {
+  sources = [
+    "scoped_passkey_keychain_provider_override.h",
+    "scoped_passkey_keychain_provider_override.mm",
+  ]
+  deps = [
+    "//base",
+    "//ios/chrome/common/credential_provider:passkey_keychain_provider_header",
+  ]
+}
+
+source_set("eg_app_support+eg2") {
+  configs += [ "//build/config/ios:xctest_config" ]
+  testonly = true
+  sources = [
+    "ios_chrome_passkey_client_app_interface.h",
+    "ios_chrome_passkey_client_app_interface.mm",
+  ]
+  deps = [
+    ":common",
+    "//base",
+    "//ios/chrome/common/credential_provider:passkey_keychain_provider_chrome",
+    "//testing/gmock",
+  ]
+}
+
+source_set("eg_test_support+eg2") {
+  configs += [ "//build/config/ios:xctest_config" ]
+  testonly = true
+
+  sources = [
+    "ios_chrome_passkey_client_app_interface.h",
+    "ios_chrome_passkey_client_app_interface_stub.mm",
+  ]
+  deps = [ "//ios/testing/earl_grey:eg_test_support+eg2" ]
+}
+
+source_set("eg2_tests") {
+  configs += [ "//build/config/ios:xctest_config" ]
+  testonly = true
+
+  sources = [ "passkey_egtest.mm" ]
+
+  deps = [
+    ":eg_test_support+eg2",
+    "//components/webauthn/ios:features",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/authentication/test:eg_test_support+eg2",
+    "//ios/chrome/browser/signin/model:fake_system_identity",
+    "//ios/chrome/test/earl_grey:eg_test_support+eg2",
+    "//ios/testing/earl_grey:eg_test_support+eg2",
+    "//net:test_support",
+    "//ui/base",
+  ]
+}

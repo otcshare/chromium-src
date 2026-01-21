@@ -4,15 +4,16 @@
 
 #include "remoting/host/desktop_process.h"
 
-#include <stdint.h>
-
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
@@ -21,11 +22,16 @@
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_listener.h"
+#include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
+#include "mojo/public/cpp/system/message_pipe.h"
 #include "remoting/base/auto_thread.h"
 #include "remoting/base/auto_thread_task_runner.h"
-#include "remoting/host/base/host_exit_codes.h"
+#include "remoting/host/base/desktop_environment_options.h"
 #include "remoting/host/base/screen_resolution.h"
+#include "remoting/host/desktop_environment.h"
 #include "remoting/host/desktop_process.h"
 #include "remoting/host/fake_keyboard_layout_monitor.h"
 #include "remoting/host/fake_mouse_cursor_monitor.h"
@@ -33,7 +39,6 @@
 #include "remoting/host/mojom/desktop_session.mojom.h"
 #include "remoting/host/remote_open_url/fake_url_forwarder_configurator.h"
 #include "remoting/protocol/fake_desktop_capturer.h"
-#include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -58,7 +63,6 @@ class MockDaemonListener : public IPC::Listener,
 
   ~MockDaemonListener() override = default;
 
-  bool OnMessageReceived(const IPC::Message& message) override;
   void OnAssociatedInterfaceRequest(
       const std::string& interface_name,
       mojo::ScopedInterfaceEndpointHandle handle) override;
@@ -69,7 +73,7 @@ class MockDaemonListener : public IPC::Listener,
               (override));
   MOCK_METHOD(void, InjectSecureAttentionSequence, (), (override));
   MOCK_METHOD(void, CrashNetworkProcess, (), (override));
-  MOCK_METHOD(void, OnChannelConnected, (int32_t), (override));
+  MOCK_METHOD(void, OnChannelConnected, (std::int32_t), (override));
   MOCK_METHOD(void, OnChannelError, (), (override));
 
   void Disconnect();
@@ -88,18 +92,11 @@ class MockNetworkListener : public IPC::Listener {
 
   ~MockNetworkListener() override = default;
 
-  bool OnMessageReceived(const IPC::Message& message) override;
-
-  MOCK_METHOD(void, OnChannelConnected, (int32_t), (override));
+  MOCK_METHOD(void, OnChannelConnected, (std::int32_t), (override));
   MOCK_METHOD(void, OnChannelError, (), (override));
 
   MOCK_METHOD0(OnDesktopEnvironmentCreated, void());
 };
-
-bool MockDaemonListener::OnMessageReceived(const IPC::Message& message) {
-  ADD_FAILURE() << "Unexpected call to OnMessageReceived()";
-  return false;
-}
 
 void MockDaemonListener::OnAssociatedInterfaceRequest(
     const std::string& interface_name,
@@ -112,11 +109,6 @@ void MockDaemonListener::OnAssociatedInterfaceRequest(
 
 void MockDaemonListener::Disconnect() {
   desktop_session_request_handler_.reset();
-}
-
-bool MockNetworkListener::OnMessageReceived(const IPC::Message& message) {
-  ADD_FAILURE() << "Unexpected call to OnMessageReceived()";
-  return false;
 }
 
 }  // namespace
@@ -132,7 +124,10 @@ class DesktopProcessTest : public testing::Test {
 
   // Creates a DesktopEnvironment with a fake webrtc::DesktopCapturer, to mock
   // DesktopEnvironmentFactory::Create().
-  std::unique_ptr<DesktopEnvironment> CreateDesktopEnvironment();
+  void CreateDesktopEnvironment(base::WeakPtr<ClientSessionControl>,
+                                base::WeakPtr<ClientSessionEvents>,
+                                const DesktopEnvironmentOptions&,
+                                DesktopEnvironmentFactory::CreateCallback);
 
   // Creates a fake InputInjector, to mock
   // DesktopEnvironment::CreateInputInjector().
@@ -205,8 +200,11 @@ void DesktopProcessTest::StoreDesktopHandle(
   desktop_pipe_handle_ = std::move(desktop_pipe);
 }
 
-std::unique_ptr<DesktopEnvironment>
-DesktopProcessTest::CreateDesktopEnvironment() {
+void DesktopProcessTest::CreateDesktopEnvironment(
+    base::WeakPtr<ClientSessionControl>,
+    base::WeakPtr<ClientSessionEvents>,
+    const DesktopEnvironmentOptions&,
+    DesktopEnvironmentFactory::CreateCallback callback) {
   auto desktop_environment = std::make_unique<MockDesktopEnvironment>();
   EXPECT_CALL(*desktop_environment, CreateAudioCapturer()).Times(0);
   EXPECT_CALL(*desktop_environment, CreateInputInjector())
@@ -214,7 +212,7 @@ DesktopProcessTest::CreateDesktopEnvironment() {
       .WillOnce(Invoke(this, &DesktopProcessTest::CreateInputInjector));
   EXPECT_CALL(*desktop_environment, CreateActionExecutor()).Times(AtMost(1));
   EXPECT_CALL(*desktop_environment, CreateScreenControls()).Times(AtMost(1));
-  EXPECT_CALL(*desktop_environment, CreateVideoCapturer())
+  EXPECT_CALL(*desktop_environment, CreateVideoCapturer(_))
       .Times(AtMost(1))
       .WillOnce(
           Return(ByMove(std::make_unique<protocol::FakeDesktopCapturer>())));
@@ -229,14 +227,18 @@ DesktopProcessTest::CreateDesktopEnvironment() {
       .WillOnce(
           Return(ByMove(std::make_unique<FakeUrlForwarderConfigurator>())));
   EXPECT_CALL(*desktop_environment, CreateFileOperations()).Times(AtMost(1));
-  EXPECT_CALL(*desktop_environment, GetCapabilities())
-      .Times(AtMost(1));
-  EXPECT_CALL(*desktop_environment, SetCapabilities(_))
-      .Times(AtMost(1));
+  EXPECT_CALL(*desktop_environment, GetCapabilities()).Times(AtMost(1));
+  EXPECT_CALL(*desktop_environment, SetCapabilities(_)).Times(AtMost(1));
 
-  // Notify the test that the desktop environment has been created.
-  network_listener_.OnDesktopEnvironmentCreated();
-  return desktop_environment;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](MockNetworkListener* network_listener, auto callback,
+                        auto desktop_environment) {
+                       network_listener->OnDesktopEnvironmentCreated();
+                       std::move(callback).Run(std::move(desktop_environment));
+                     },
+                     base::Unretained(&network_listener_), std::move(callback),
+                     std::move(desktop_environment)));
 }
 
 std::unique_ptr<InputInjector> DesktopProcessTest::CreateInputInjector() {
@@ -283,7 +285,7 @@ void DesktopProcessTest::RunDesktopProcess() {
 
   std::unique_ptr<MockDesktopEnvironmentFactory> desktop_environment_factory(
       new MockDesktopEnvironmentFactory());
-  EXPECT_CALL(*desktop_environment_factory, Create(_, _, _))
+  EXPECT_CALL(*desktop_environment_factory, Create(_, _, _, _))
       .Times(AnyNumber())
       .WillRepeatedly(
           Invoke(this, &DesktopProcessTest::CreateDesktopEnvironment));
@@ -360,8 +362,8 @@ TEST_F(DesktopProcessTest, CreateNetworkChannel) {
         CreateNetworkChannel(std::move(desktop_pipe));
       });
   EXPECT_CALL(network_listener_, OnChannelConnected(_))
-      .WillOnce(InvokeWithoutArgs(
-          this, &DesktopProcessTest::DisconnectChannels));
+      .WillOnce(
+          InvokeWithoutArgs(this, &DesktopProcessTest::DisconnectChannels));
 
   RunDesktopProcess();
 }
@@ -382,15 +384,15 @@ TEST_F(DesktopProcessTest, StartSessionAgent) {
   }
 
   EXPECT_CALL(network_listener_, OnDesktopEnvironmentCreated())
-      .WillOnce(InvokeWithoutArgs(
-          this, &DesktopProcessTest::PostDisconnectChannels));
+      .WillOnce(
+          InvokeWithoutArgs(this, &DesktopProcessTest::PostDisconnectChannels));
 
   RunDesktopProcess();
 }
 
 // Run the desktop process and ask it to crash.
 TEST_F(DesktopProcessTest, DeathTest) {
-  testing::GTEST_FLAG(death_test_style) = "threadsafe";
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
 
   EXPECT_DEATH(RunDeathTest(), "");
 }

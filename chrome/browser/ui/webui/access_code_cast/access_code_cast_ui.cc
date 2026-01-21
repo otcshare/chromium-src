@@ -7,9 +7,9 @@
 #include "chrome/browser/media/router/discovery/access_code/access_code_cast_feature.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/access_code_cast/access_code_cast_dialog.h"
+#include "chrome/browser/ui/webui/access_code_cast/access_code_cast_handler.h"
 #include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/access_code_cast_resources.h"
@@ -19,18 +19,26 @@
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "ui/base/webui/web_ui_util.h"
+#include "ui/webui/webui_util.h"
 
 namespace media_router {
 
+bool AccessCodeCastUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  return media_router::GetAccessCodeCastEnabledPref(profile);
+}
+
 AccessCodeCastUI::AccessCodeCastUI(content::WebUI* web_ui)
     : MojoWebDialogUI(web_ui) {
-  auto source = base::WrapUnique(
-      content::WebUIDataSource::Create(chrome::kChromeUIAccessCodeCastHost));
-  webui::SetupWebUIDataSource(
-      source.get(),
-      base::make_span(kAccessCodeCastResources, kAccessCodeCastResourcesSize),
-      IDR_ACCESS_CODE_CAST_INDEX_HTML);
+  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+      web_ui->GetWebContents()->GetBrowserContext(),
+      chrome::kChromeUIAccessCodeCastHost);
+  webui::SetupWebUIDataSource(source, kAccessCodeCastResources,
+                              IDR_ACCESS_CODE_CAST_INDEX_HTML);
 
   static constexpr webui::LocalizedString kStrings[] = {
       {"accessCodeMessage", IDS_ACCESS_CODE_CAST_ACCESS_CODE_MESSAGE},
@@ -40,6 +48,7 @@ AccessCodeCastUI::AccessCodeCastUI(content::WebUI* web_ui)
       {"dialogTitle", IDS_ACCESS_CODE_CAST_DIALOG_TITLE},
       {"enterCharacter", IDS_ACCESS_CODE_CAST_ENTER_CHARACTER},
       {"errorAccessCode", IDS_ACCESS_CODE_CAST_ERROR_ACCESS_CODE},
+      {"errorDifferentNetwork", IDS_ACCESS_CODE_CAST_ERROR_DIFFERENT_NETWORK},
       {"errorNetwork", IDS_ACCESS_CODE_CAST_ERROR_NETWORK},
       {"errorPermission", IDS_ACCESS_CODE_CAST_ERROR_PERMISSION},
       {"errorProfileSync", IDS_ACCESS_CODE_CAST_ERROR_PROFILE_SYNC},
@@ -73,10 +82,6 @@ AccessCodeCastUI::AccessCodeCastUI(content::WebUI* web_ui)
   plural_string_handler->AddLocalizedString(
       "managedFootnoteYears", IDS_ACCESS_CODE_CAST_MANAGED_FOOTNOTE_YEARS);
   web_ui->AddMessageHandler(std::move(plural_string_handler));
-
-  content::BrowserContext* browser_context =
-      web_ui->GetWebContents()->GetBrowserContext();
-  content::WebUIDataSource::Add(browser_context, source.release());
 }
 
 AccessCodeCastUI::~AccessCodeCastUI() = default;

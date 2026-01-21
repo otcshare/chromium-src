@@ -7,12 +7,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
+#include "third_party/skia/include/core/SkM44.h"
+#include "third_party/skia/include/core/SkMatrix.h"
+#include "third_party/skia/include/core/SkRect.h"
 #include "ui/gfx/geometry/axis_transform2d.h"
 #include "ui/gfx/geometry/quad_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/transform.h"
 
 namespace gfx {
@@ -60,8 +66,9 @@ SkRect RectFToSkRect(const RectF& rect) {
 }
 
 RectF SkRectToRectF(const SkRect& rect) {
-  return RectF(SkScalarToFloat(rect.x()), SkScalarToFloat(rect.y()),
-               SkScalarToFloat(rect.width()), SkScalarToFloat(rect.height()));
+  return BoundingRect(
+      PointF(SkScalarToFloat(rect.left()), SkScalarToFloat(rect.top())),
+      PointF(SkScalarToFloat(rect.right()), SkScalarToFloat(rect.bottom())));
 }
 
 SkSize SizeFToSkSize(const SizeF& size) {
@@ -81,7 +88,7 @@ Size SkISizeToSize(const SkISize& size) {
   return Size(size.width(), size.height());
 }
 
-void QuadFToSkPoints(const QuadF& quad, SkPoint points[4]) {
+void QuadFToSkPoints(const QuadF& quad, base::span<SkPoint, 4> points) {
   points[0] = PointFToSkPoint(quad.p1());
   points[1] = PointFToSkPoint(quad.p2());
   points[2] = PointFToSkPoint(quad.p3());
@@ -110,12 +117,6 @@ Transform SkM44ToTransform(const SkM44& matrix) {
       matrix.rc(1, 0), matrix.rc(1, 1), matrix.rc(1, 2), matrix.rc(1, 3),
       matrix.rc(2, 0), matrix.rc(2, 1), matrix.rc(2, 2), matrix.rc(2, 3),
       matrix.rc(3, 0), matrix.rc(3, 1), matrix.rc(3, 2), matrix.rc(3, 3));
-}
-
-// TODO(crbug.com/1359528): Remove this function in favor of the other form.
-void TransformToFlattenedSkMatrix(const gfx::Transform& transform,
-                                  SkMatrix* flattened) {
-  *flattened = TransformToFlattenedSkMatrix(transform);
 }
 
 SkMatrix TransformToFlattenedSkMatrix(const Transform& matrix) {

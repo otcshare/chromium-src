@@ -2,14 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/utility/image_writer/image_writer.h"
+
 #include <windows.h>
+
 #include <setupapi.h>
 #include <stddef.h>
 #include <winioctl.h>
 
+#include <string_view>
+
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "chrome/utility/image_writer/error_message_strings.h"
-#include "chrome/utility/image_writer/image_writer.h"
 
 namespace image_writer {
 
@@ -17,14 +24,10 @@ const size_t kStorageQueryBufferSize = 1024;
 
 bool ImageWriter::IsValidDevice() {
   base::win::ScopedHandle device_handle(
-      CreateFile(device_path_.value().c_str(),
-                 GENERIC_READ | GENERIC_WRITE,
-                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                 NULL,
-                 OPEN_EXISTING,
-                 FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
-                 NULL));
-  if (!device_handle.IsValid()) {
+      ::CreateFile(device_path_.value().c_str(), GENERIC_READ | GENERIC_WRITE,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                   FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, NULL));
+  if (!device_handle.is_valid()) {
     Error(error::kOpenDevice);
     return false;
   }
@@ -34,13 +37,13 @@ bool ImageWriter::IsValidDevice() {
   query.QueryType = PropertyStandardQuery;
   DWORD bytes_returned;
 
-  std::unique_ptr<char[]> output_buf(new char[kStorageQueryBufferSize]);
-  BOOL status = DeviceIoControl(
+  auto output_buf = base::HeapArray<char>::Uninit(kStorageQueryBufferSize);
+  BOOL status = ::DeviceIoControl(
       device_handle.Get(),             // Device handle.
       IOCTL_STORAGE_QUERY_PROPERTY,    // Flag to request device properties.
       &query,                          // Query parameters.
       sizeof(STORAGE_PROPERTY_QUERY),  // query parameters size.
-      output_buf.get(),                // output buffer.
+      output_buf.data(),               // output buffer.
       kStorageQueryBufferSize,         // Size of buffer.
       &bytes_returned,                 // Number of bytes returned.
                                        // Must not be null.
@@ -52,7 +55,7 @@ bool ImageWriter::IsValidDevice() {
   }
 
   STORAGE_DEVICE_DESCRIPTOR* device_descriptor =
-      reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(output_buf.get());
+      reinterpret_cast<STORAGE_DEVICE_DESCRIPTOR*>(output_buf.data());
 
   return device_descriptor->RemovableMedia == TRUE ||
          device_descriptor->BusType == BusTypeUsb;
@@ -61,14 +64,10 @@ bool ImageWriter::IsValidDevice() {
 bool ImageWriter::OpenDevice() {
   // Windows requires that device files be opened with FILE_FLAG_NO_BUFFERING
   // and FILE_FLAG_WRITE_THROUGH.  These two flags are not part of base::File.
-  device_file_ =
-      base::File(CreateFile(device_path_.value().c_str(),
-                            GENERIC_READ | GENERIC_WRITE,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE,
-                            NULL,
-                            OPEN_EXISTING,
-                            FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
-                            NULL));
+  device_file_ = base::File(
+      ::CreateFile(device_path_.value().c_str(), GENERIC_READ | GENERIC_WRITE,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                   FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, NULL));
   return device_file_.IsValid();
 }
 
@@ -80,9 +79,8 @@ void ImageWriter::UnmountVolumes(base::OnceClosure continuation) {
   STORAGE_DEVICE_NUMBER sdn = {0};
   DWORD bytes_returned;
 
-  BOOL status = DeviceIoControl(
-      device_file_.GetPlatformFile(),
-      IOCTL_STORAGE_GET_DEVICE_NUMBER,
+  BOOL status = ::DeviceIoControl(
+      device_file_.GetPlatformFile(), IOCTL_STORAGE_GET_DEVICE_NUMBER,
       NULL,             // Unused, must be NULL.
       0,                // Unused, must be 0.
       &sdn,             // An input buffer to hold the STORAGE_DEVICE_NUMBER
@@ -97,7 +95,9 @@ void ImageWriter::UnmountVolumes(base::OnceClosure continuation) {
   ULONG device_number = sdn.DeviceNumber;
 
   TCHAR volume_path[MAX_PATH + 1];
-  HANDLE volume_finder = FindFirstVolume(volume_path, MAX_PATH + 1);
+  base::span<TCHAR> volume_path_span(volume_path);
+  HANDLE volume_finder = ::FindFirstVolume(
+      volume_path_span.data(), static_cast<DWORD>(volume_path_span.size()));
   if (volume_finder == INVALID_HANDLE_VALUE) {
     return;
   }
@@ -107,22 +107,20 @@ void ImageWriter::UnmountVolumes(base::OnceClosure continuation) {
   bool success = true;
 
   while (first_volume ||
-         FindNextVolume(volume_finder, volume_path, MAX_PATH + 1)) {
+         ::FindNextVolume(volume_finder, volume_path_span.data(),
+                          static_cast<DWORD>(volume_path_span.size()))) {
     first_volume = false;
 
-    size_t length = wcsnlen(volume_path, MAX_PATH + 1);
+    std::wstring_view path_view(volume_path_span.data());
+    size_t length = path_view.length();
     if (length < 1) {
       continue;
     }
-    volume_path[length - 1] = L'\0';
+    volume_path_span[length - 1] = L'\0';
 
-    volume_handle = CreateFile(volume_path,
-                               GENERIC_READ | GENERIC_WRITE,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL,
-                               OPEN_EXISTING,
-                               0,
-                               NULL);
+    volume_handle = ::CreateFile(volume_path, GENERIC_READ | GENERIC_WRITE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                 OPEN_EXISTING, 0, NULL);
     if (volume_handle == INVALID_HANDLE_VALUE) {
       PLOG(ERROR) << "Opening volume handle failed.";
       success = false;
@@ -132,17 +130,12 @@ void ImageWriter::UnmountVolumes(base::OnceClosure continuation) {
     volume_handles_.push_back(volume_handle);
 
     VOLUME_DISK_EXTENTS disk_extents = {0};
-    status = DeviceIoControl(volume_handle,
-                             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-                             NULL,
-                             0,
-                             &disk_extents,
-                             sizeof(disk_extents),
-                             &bytes_returned,
-                             NULL);
+    status = ::DeviceIoControl(
+        volume_handle, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, NULL, 0,
+        &disk_extents, sizeof(disk_extents), &bytes_returned, NULL);
 
     if (!status) {
-      DWORD error = GetLastError();
+      DWORD error = ::GetLastError();
       if (error == ERROR_MORE_DATA || error == ERROR_INVALID_FUNCTION ||
           error == ERROR_NOT_READY) {
         continue;
@@ -158,30 +151,18 @@ void ImageWriter::UnmountVolumes(base::OnceClosure continuation) {
       continue;
     }
 
-    status = DeviceIoControl(volume_handle,
-                             FSCTL_LOCK_VOLUME,
-                             NULL,
-                             0,
-                             NULL,
-                             0,
-                             &bytes_returned,
-                             NULL);
+    status = ::DeviceIoControl(volume_handle, FSCTL_LOCK_VOLUME, NULL, 0, NULL,
+                               0, &bytes_returned, NULL);
     if (!status) {
       PLOG(ERROR) << "Unable to lock volume.";
       success = false;
       break;
     }
 
-    status = DeviceIoControl(volume_handle,
-                             FSCTL_DISMOUNT_VOLUME,
-                             NULL,
-                             0,
-                             NULL,
-                             0,
-                             &bytes_returned,
-                             NULL);
+    status = ::DeviceIoControl(volume_handle, FSCTL_DISMOUNT_VOLUME, NULL, 0,
+                               NULL, 0, &bytes_returned, NULL);
     if (!status) {
-      DWORD error = GetLastError();
+      DWORD error = ::GetLastError();
       if (error != ERROR_NOT_SUPPORTED) {
         PLOG(ERROR) << "Unable to dismount volume.";
         success = false;
@@ -191,7 +172,7 @@ void ImageWriter::UnmountVolumes(base::OnceClosure continuation) {
   }
 
   if (volume_finder != INVALID_HANDLE_VALUE) {
-    FindVolumeClose(volume_finder);
+    ::FindVolumeClose(volume_finder);
   }
 
   if (success)

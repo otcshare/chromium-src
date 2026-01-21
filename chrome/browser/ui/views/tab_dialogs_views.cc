@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "build/build_config.h"
-#include "chrome/browser/ui/sync/profile_signin_confirmation_helper.h"
 #include "chrome/browser/ui/views/hung_renderer_view.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
 #include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
@@ -75,31 +74,30 @@ void TabDialogsViews::ShowManagePasswordsBubble(bool user_action) {
 void TabDialogsViews::HideManagePasswordsBubble() {
   PasswordBubbleViewBase* bubble =
       PasswordBubbleViewBase::manage_password_bubble();
-  if (!bubble)
+  if (!bubble) {
     return;
-  if (bubble->GetWebContents() == web_contents_)
+  }
+  if (bubble->GetWebContents() == web_contents_) {
     PasswordBubbleViewBase::CloseCurrentBubble();
+  }
 }
 
 void TabDialogsViews::ShowDeprecatedAppsDialog(
     const extensions::ExtensionId& optional_launched_extension_id,
     const std::set<extensions::ExtensionId>& deprecated_app_ids,
-    content::WebContents* web_contents,
-    base::OnceClosure launch_anyways) {
+    content::WebContents* web_contents) {
 #if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_CHROMEOS)
   DeprecatedAppsDialogView::CreateAndShowDialog(
-      optional_launched_extension_id, deprecated_app_ids, web_contents,
-      std::move(launch_anyways));
+      optional_launched_extension_id, deprecated_app_ids, web_contents);
 #endif
 }
 
 void TabDialogsViews::ShowForceInstalledDeprecatedAppsDialog(
     const extensions::ExtensionId& app_id,
-    content::WebContents* web_contents,
-    base::OnceClosure launch_anyways) {
+    content::WebContents* web_contents) {
 #if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_CHROMEOS)
-  ForceInstalledDeprecatedAppsDialogView::CreateAndShowDialog(
-      app_id, web_contents, std::move(launch_anyways));
+  ForceInstalledDeprecatedAppsDialogView::CreateAndShowDialog(app_id,
+                                                              web_contents);
 #endif
 }
 

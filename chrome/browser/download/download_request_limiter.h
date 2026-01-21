@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
@@ -231,21 +231,22 @@ class DownloadRequestLimiter
 
   // Returns the download status for a page. This does not change the state in
   // anyway.
-  DownloadStatus GetDownloadStatus(content::WebContents* web_contents);
+  DownloadStatus GetDownloadStatus(content::WebContents* web_contents) const;
 
   // Returns the download UI status for a page for the purposes of showing an
   // omnibox decoration.
-  DownloadUiStatus GetDownloadUiStatus(content::WebContents* web_contents);
+  DownloadUiStatus GetDownloadUiStatus(
+      content::WebContents* web_contents) const;
 
   // Returns the download origin that is associated with the current UI status
   // for the purposes of showing an omnibox decoration.
-  GURL GetDownloadOrigin(content::WebContents* web_contents);
+  GURL GetDownloadOrigin(content::WebContents* web_contents) const;
 
   // Check if download can proceed and notifies the callback on UI thread.
   void CanDownload(const content::WebContents::Getter& web_contents_getter,
                    const GURL& url,
                    const std::string& request_method,
-                   absl::optional<url::Origin> request_initiator,
+                   std::optional<url::Origin> request_initiator,
                    bool from_download_cross_origin_redirect,
                    Callback callback);
 
@@ -266,6 +267,9 @@ class DownloadRequestLimiter
                            DownloadRequestLimiterIsUnaffectedByPrerendering);
   FRIEND_TEST_ALL_PREFIXES(FencedFrameDownloadTest,
                            DownloadRequestLimiterIsUnaffectedByFencedFrame);
+  FRIEND_TEST_ALL_PREFIXES(
+      ContentSettingBubbleModelUnusedPermissionRevocationForAllSurfacesTest,
+      AutomaticDownloads_LastVisited);
   friend class base::RefCountedThreadSafe<DownloadRequestLimiter>;
   friend class BackgroundFetchBrowserTest;
   friend class ContentSettingBubbleDialogTest;
@@ -274,29 +278,38 @@ class DownloadRequestLimiter
 
   ~DownloadRequestLimiter();
 
+  // Gets the download state for the specified controller. Returns nullptr if
+  // the TabDownloadState does not exist.
+  //
+  // The returned TabDownloadState is owned by the DownloadRequestLimiter and
+  // deleted when no longer needed (the Remove method is invoked).
+  TabDownloadState* GetDownloadState(content::WebContents* web_contents) const;
+
   // Gets the download state for the specified controller. If the
-  // TabDownloadState does not exist and |create| is true, one is created.
+  // TabDownloadState does not exist, one is created.
   // See TabDownloadState's constructor description for details on the two
   // controllers.
   //
   // The returned TabDownloadState is owned by the DownloadRequestLimiter and
   // deleted when no longer needed (the Remove method is invoked).
-  TabDownloadState* GetDownloadState(content::WebContents* web_contents,
-                                     bool create);
+  TabDownloadState* GetOrCreateDownloadState(
+      content::WebContents* web_contents);
 
   // Does the work of updating the download status on the UI thread and
   // potentially prompting the user.
-  void CanDownloadImpl(content::WebContents* originating_contents,
+  void CanDownloadImpl(const GURL& url,
+                       content::WebContents* originating_contents,
                        const std::string& request_method,
-                       absl::optional<url::Origin> request_initiator,
+                       std::optional<url::Origin> request_initiator,
                        bool from_download_cross_origin_redirect,
                        Callback callback);
 
   // Invoked when decision to download has been made.
   void OnCanDownloadDecided(
+      const GURL& url,
       const content::WebContents::Getter& web_contents_getter,
       const std::string& request_method,
-      absl::optional<url::Origin> request_initiator,
+      std::optional<url::Origin> request_initiator,
       bool from_download_cross_origin_redirect,
       Callback orig_callback,
       bool allow);
@@ -325,7 +338,9 @@ class DownloadRequestLimiter
   // if the state is other than ALLOW_ONE_DOWNLOAD. Similarly once the state
   // transitions from anything but ALLOW_ONE_DOWNLOAD back to ALLOW_ONE_DOWNLOAD
   // the TabDownloadState is removed and deleted (by way of Remove).
-  typedef std::map<content::WebContents*, TabDownloadState*> StateMap;
+  typedef std::map<content::WebContents*,
+                   raw_ptr<TabDownloadState, CtnExperimental>>
+      StateMap;
   StateMap state_map_;
 
   CanDownloadDecidedCallback on_can_download_decided_callback_;

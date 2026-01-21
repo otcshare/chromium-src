@@ -11,35 +11,51 @@
 #include "build/build_config.h"
 #include "components/policy/policy_export.h"
 
-namespace policy {
-namespace features {
+namespace policy::features {
 
-// Enable force installed Chrome apps policy migration.
-POLICY_EXPORT BASE_DECLARE_FEATURE(kDefaultChromeAppsMigration);
+// Enable the PolicyBlocklistThrottle optimization to hide the DEFER latency
+// on WillStartRequest and WillRedirectRequest. See https://crbug.com/349964973.
+// This is launched, but the feature flag will be kept in 2025 for monitoring.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kPolicyBlocklistProceedUntilResponse);
 
-// Enable reporting Login events to the reporting connector when the Password
-// Manager detects that the user logged in to a web page.
-POLICY_EXPORT BASE_DECLARE_FEATURE(kLoginEventReporting);
-
-// Enable reporting password leaks to the reporting connector when the Password
-// Manager's Leak Detector has found some compromised credentials.
-POLICY_EXPORT BASE_DECLARE_FEATURE(kPasswordBreachEventReporting);
-
-// Enable the UserCloudSigninRestrictionPolicyFetcher to get the
-// ManagedAccountsSigninRestriction policy for a dasher account.
+// Enables the fact that the ProfileSeparationDomainExceptionList retroactively
+// signs out accounts that require a new profile. This is used as a kill switch.
 POLICY_EXPORT BASE_DECLARE_FEATURE(
-    kEnableUserCloudSigninRestrictionPolicyFetcher);
+    kProfileSeparationDomainExceptionListRetroactive);
 
-// Enable MetricsReportingEnabled policy to alter MetricsReportingState on
-// Android.
+// Enables the addition of new security fields for SecOps.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kEnhancedSecurityEventFields);
+
+// Controls if we can use the cec flag in PolicyData.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kUseCECFlagInPolicyData);
+
+#if BUILDFLAG(IS_ANDROID)
+// Enables policy initialization for signed-in users in new entry points.
 POLICY_EXPORT BASE_DECLARE_FEATURE(
-    kActivateMetricsReportingEnabledPolicyAndroid);
+    kInitializePoliciesForSignedInUserInNewEntryPoints);
+#endif
 
-// Causes the DMToken to be deleted (rather than invalidated) when a browser is
-// deleted from CBCM.
-POLICY_EXPORT BASE_DECLARE_FEATURE(kDmTokenDeletion);
+// Enables a configurable delay for policy registration.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kCustomPolicyRegistrationDelay);
+POLICY_EXPORT extern const base::FeatureParam<base::TimeDelta>
+    kPolicyRegistrationDelay;
 
-}  // namespace features
-}  // namespace policy
+// Used to enable future_on policies on Desktop Android.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kFuturePoliciesOnDesktopAndroid);
+
+// Used to add a captive portal check in SafeSitesNavigationThrottle.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kSafeSitesCaptivePortalCheck);
+
+// Used to enable extension install policy support.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kEnableExtensionInstallPolicyFetching);
+
+// When enabled, uses ManagementService to determine whether to honor sensitive
+// policies. When disabled, falls back to the original ShouldHonorPolicies()
+// behavior. This flag allows reverting if the new approach causes issues.
+// Note: Only has an effect on Mac and Windows where ShouldHonorPolicies()
+// performs platform-specific checks.
+POLICY_EXPORT BASE_DECLARE_FEATURE(kUseManagementServiceForSensitivePolicies);
+
+}  // namespace policy::features
 
 #endif  // COMPONENTS_POLICY_CORE_COMMON_FEATURES_H_

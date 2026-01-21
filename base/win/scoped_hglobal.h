@@ -9,41 +9,42 @@
 
 #include <stddef.h>
 
+#include <utility>
+
+#include "base/compiler_specific.h"
+
 namespace base {
 namespace win {
 
 // Like ScopedHandle except for HGLOBAL.
-template <class T>
+template <class Ptr>
 class ScopedHGlobal {
  public:
-  explicit ScopedHGlobal(HGLOBAL glob) : glob_(glob) {
-    data_ = static_cast<T>(GlobalLock(glob_));
-  }
+  explicit ScopedHGlobal(HGLOBAL glob)
+      : glob_(glob), data_(static_cast<Ptr>(GlobalLock(glob_))) {}
 
   ScopedHGlobal(const ScopedHGlobal&) = delete;
   ScopedHGlobal& operator=(const ScopedHGlobal&) = delete;
 
   ~ScopedHGlobal() { GlobalUnlock(glob_); }
 
-  T get() { return data_; }
+  Ptr data() { return data_; }
+  size_t size() const { return GlobalSize(glob_); }
 
-  size_t Size() const { return GlobalSize(glob_); }
-
-  T operator->() const {
+  Ptr operator->() const {
     assert(data_ != 0);
     return data_;
   }
 
-  T release() {
-    T data = data_;
-    data_ = NULL;
-    return data;
-  }
+  Ptr release() { return std::exchange(data_, nullptr); }
+
+  Ptr begin() { return data(); }
+  Ptr end() { return UNSAFE_TODO(data() + size()); }
 
  private:
   HGLOBAL glob_;
 
-  T data_;
+  Ptr data_;
 };
 
 }  // namespace win

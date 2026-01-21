@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 
 namespace net::ntlm {
 
@@ -56,22 +57,9 @@ bool NtlmBufferReader::ReadBytes(base::span<uint8_t> buffer) {
   if (buffer.empty())
     return true;
 
-  memcpy(buffer.data(), GetBufferAtCursor(), buffer.size());
+  buffer.copy_from(GetSubspanAtCursor(buffer.size()));
 
   AdvanceCursor(buffer.size());
-  return true;
-}
-
-bool NtlmBufferReader::ReadBytesFrom(const SecurityBuffer& sec_buf,
-                                     base::span<uint8_t> buffer) {
-  if (!CanReadFrom(sec_buf) || buffer.size() < sec_buf.length)
-    return false;
-
-  if (buffer.empty())
-    return true;
-
-  memcpy(buffer.data(), GetBufferPtr() + sec_buf.offset, sec_buf.length);
-
   return true;
 }
 
@@ -80,8 +68,10 @@ bool NtlmBufferReader::ReadPayloadAsBufferReader(const SecurityBuffer& sec_buf,
   if (!CanReadFrom(sec_buf))
     return false;
 
-  *reader = NtlmBufferReader(
-      base::make_span(GetBufferPtr() + sec_buf.offset, sec_buf.length));
+  *reader =
+      sec_buf.length
+          ? NtlmBufferReader(buffer_.subspan(sec_buf.offset, sec_buf.length))
+          : NtlmBufferReader();
   return true;
 }
 
@@ -133,7 +123,8 @@ bool NtlmBufferReader::ReadTargetInfo(size_t target_info_len,
       return false;
 
     // Take a copy of the payload in the AVPair.
-    pair.buffer.assign(GetBufferAtCursor(), GetBufferAtCursor() + pair.avlen);
+    auto payload = GetSubspanAtCursor(pair.avlen);
+    pair.buffer.assign(payload.begin(), payload.end());
     if (pair.avid == TargetInfoAvId::kEol) {
       // Terminator must have zero length.
       if (pair.avlen != 0)
@@ -240,8 +231,9 @@ bool NtlmBufferReader::MatchSignature() {
   if (!CanRead(kSignatureLen))
     return false;
 
-  if (memcmp(kSignature, GetBufferAtCursor(), kSignatureLen) != 0)
+  if (GetSubspanAtCursor(kSignatureLen) != base::span(kSignature)) {
     return false;
+  }
 
   AdvanceCursor(kSignatureLen);
   return true;
@@ -261,9 +253,11 @@ bool NtlmBufferReader::MatchZeros(size_t count) {
   if (!CanRead(count))
     return false;
 
+  auto to_check = GetSubspanAtCursor(count);
   for (size_t i = 0; i < count; i++) {
-    if (GetBufferAtCursor()[i] != 0)
+    if (to_check[i] != 0) {
       return false;
+    }
   }
 
   AdvanceCursor(count);

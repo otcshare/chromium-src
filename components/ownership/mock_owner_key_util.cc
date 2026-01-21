@@ -10,7 +10,6 @@
 #include "base/files/file_path.h"
 #include "crypto/nss_key_util.h"
 #include "crypto/nss_util.h"
-#include "crypto/rsa_private_key.h"
 
 namespace ownership {
 
@@ -48,8 +47,15 @@ crypto::ScopedSECKEYPrivateKey MockOwnerKeyUtil::GenerateKeyPair(
 crypto::ScopedSECKEYPrivateKey MockOwnerKeyUtil::FindPrivateKeyInSlot(
     const std::vector<uint8_t>& key,
     PK11SlotInfo* slot) {
-  if (!private_key_)
+  if (!private_key_ || !slot) {
     return nullptr;
+  }
+
+  if (private_key_slot_id_.has_value() &&
+      (private_key_slot_id_.value() != PK11_GetSlotID(slot))) {
+    return nullptr;
+  }
+
   return crypto::ScopedSECKEYPrivateKey(
       SECKEY_CopyPrivateKey(private_key_.get()));
 }
@@ -68,24 +74,39 @@ void MockOwnerKeyUtil::SetPublicKey(const std::vector<uint8_t>& key) {
 }
 
 void MockOwnerKeyUtil::SetPublicKeyFromPrivateKey(
-    const crypto::RSAPrivateKey& key) {
-  CHECK(key.ExportPublicKey(&public_key_));
+    crypto::keypair::PrivateKey key) {
+  public_key_ = key.ToSubjectPublicKeyInfo();
 }
 
 void MockOwnerKeyUtil::ImportPrivateKeyAndSetPublicKey(
-    std::unique_ptr<crypto::RSAPrivateKey> key) {
+    crypto::keypair::PrivateKey key) {
   crypto::EnsureNSSInit();
-
-  CHECK(key->ExportPublicKey(&public_key_));
-
-  std::vector<uint8_t> key_exported;
-  CHECK(key->ExportPrivateKey(&key_exported));
 
   crypto::ScopedPK11Slot slot(PK11_GetInternalSlot());
   CHECK(slot);
+  ImportPrivateKeyAndSetPublicKeyImpl(std::move(key), slot.get());
+}
+
+void MockOwnerKeyUtil::ImportPrivateKeyAndSetPublicKeyImpl(
+    crypto::keypair::PrivateKey key,
+    PK11SlotInfo* slot) {
+  CHECK(slot);
+  crypto::EnsureNSSInit();
+
+  public_key_ = key.ToSubjectPublicKeyInfo();
+
+  std::vector<uint8_t> key_exported = key.ToPrivateKeyInfo();
+
   private_key_ = crypto::ImportNSSKeyFromPrivateKeyInfo(
-      slot.get(), key_exported, false /* not permanent */);
+      slot, key_exported, false /* not permanent */);
   CHECK(private_key_);
+}
+
+void MockOwnerKeyUtil::ImportPrivateKeyInSlotAndSetPublicKey(
+    crypto::keypair::PrivateKey key,
+    PK11SlotInfo* slot) {
+  private_key_slot_id_ = PK11_GetSlotID(slot);
+  ImportPrivateKeyAndSetPublicKeyImpl(std::move(key), slot);
 }
 
 void MockOwnerKeyUtil::SimulateGenerateKeyFailure(int fail_times) {

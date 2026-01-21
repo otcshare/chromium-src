@@ -4,7 +4,8 @@
 
 #include "chrome/browser/android/history/history_deletion_bridge.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/time/time.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/url_row.h"
@@ -26,7 +27,7 @@ TEST(HistoryDeletionBridge, TestSanitizeDeletionInfo) {
   EXPECT_EQ(expected.size(), actual.size());
 
   for (auto row : actual)
-    EXPECT_TRUE(base::Contains(expected, row.url()));
+    EXPECT_TRUE(std::ranges::contains(expected, row.url()));
 }
 
 TEST(HistoryDeletionBridge, TestAllHistoryDeletion) {
@@ -42,7 +43,7 @@ TEST(HistoryDeletionBridge, TestTimeRangeDeletion) {
   history::DeletionInfo info(time_range,
                              /*is_from_expiration=*/false, /*deleted_rows=*/{},
                              /*favicon_urls=*/{},
-                             /*restrict_urls=*/absl::nullopt);
+                             /*restrict_urls=*/std::nullopt);
   history::DeletionInfo sanitized_info =
       HistoryDeletionBridge::SanitizeDeletionInfo(info);
   EXPECT_EQ(time_range.begin(), sanitized_info.time_range().begin());

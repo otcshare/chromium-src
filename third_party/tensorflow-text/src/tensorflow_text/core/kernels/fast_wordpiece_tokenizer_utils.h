@@ -1,4 +1,4 @@
-// Copyright 2021 TF.Text Authors.
+// Copyright 2025 TF.Text Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -133,8 +133,7 @@ static constexpr uint32_t kMaskToEncodeVocabTokenId =
 // Encodes a token into the encoded value. `token_length` is without the suffix
 // indicator. The result is always a non-negative integer. Only used in building
 // the model (in flatbuffer), not in doing WordPiece tokenization.
-inline absl::StatusOr<int> EncodeToken(int token_id,
-                                       int token_length,
+inline absl::StatusOr<int> EncodeToken(int token_id, int token_length,
                                        bool is_suffix_token) {
   const int encoded_value = (is_suffix_token << kBitToIndicateSuffixToken) |
                             (token_id << kBitsToEncodeVocabTokenLength) |
@@ -228,8 +227,7 @@ inline uint32_t EncodeFailurePopList(int offset, int length) {
 // Decodes the offset (in the failure pop pool) and the length of a failure pop
 // list from the compact representation (an integer).
 inline void GetFailurePopsOffsetAndLength(uint32_t offset_and_length,
-                                          int& out_offset,
-                                          int& out_length) {
+                                          int& out_offset, int& out_length) {
   out_offset = offset_and_length >> kBitsToEncodeFailurePopsListSize;
   out_length = (offset_and_length & kMaskToEncodeFailurePopsListSize) + 1;
 }

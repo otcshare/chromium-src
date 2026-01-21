@@ -9,9 +9,9 @@
 
 namespace app_list {
 
-// A ranker that filters search results, with the main goal of preventing
-// results from one provider filling up too much of the results list. This is
-// intended to run after any other ranking has finished.
+// A ranker that filters out search results, with the main goals of
+// deduplicating results, and preventing results from one provider filling up
+// too much of the results list.
 class FilteringRanker : public Ranker {
  public:
   FilteringRanker();
@@ -22,8 +22,7 @@ class FilteringRanker : public Ranker {
 
   // Ranker:
   void Start(const std::u16string& query,
-             ResultsMap& results,
-             CategoriesList& categories) override;
+             const CategoriesList& categories) override;
   void UpdateResultRanks(ResultsMap& results, ProviderType provider) override;
 
  private:

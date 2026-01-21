@@ -6,53 +6,49 @@
 #define CHROME_BROWSER_ASH_CERT_PROVISIONING_CERT_PROVISIONING_INVALIDATOR_H_
 
 #include <memory>
+#include <string>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
-#include "chrome/browser/ash/policy/invalidation/affiliated_invalidation_service_provider.h"
-#include "components/invalidation/public/invalidation_handler.h"
-#include "components/invalidation/public/invalidation_util.h"
+#include "components/invalidation/invalidation_listener.h"
 
 class Profile;
 
-namespace invalidation {
-class InvalidationService;
-}  // namespace invalidation
-
 namespace ash::cert_provisioning {
 
-enum class CertScope;
+enum class InvalidationEvent {
+  // The client has successfully subscribed to the invalidation topic.
+  // This is relevant because if an invalidation was published for that
+  // invalidation topic before the client has successfully subscribed, the
+  // client will not receive that invalidation.
+  // This could be called multiple times because the registration could need to
+  // be re-established by the FCM client.
+  kSuccessfullySubscribed,
+  // An invalidation has been received.
+  kInvalidationReceived,
+};
 
-using OnInvalidationCallback = base::RepeatingClosure;
+using OnInvalidationEventCallback =
+    base::RepeatingCallback<void(InvalidationEvent invalidation_event)>;
 
 //=============== CertProvisioningInvalidationHandler ==========================
 
 namespace internal {
 
 // Responsible for listening to events of certificate invalidations.
-// Note: An instance of invalidator will not automatically unregister given
-// topic when destroyed so that subscription can be preserved if browser
-// restarts. A user must explicitly call |Unregister| if subscription is not
-// needed anymore.
 class CertProvisioningInvalidationHandler
-    : public invalidation::InvalidationHandler {
+    : public invalidation::InvalidationListener::Observer {
  public:
-  // Creates and registers the handler to |invalidation_service| with |topic|.
-  // |on_invalidation_callback| will be called when incoming invalidation is
-  // received. |scope| specifies a scope of invalidated certificate: user or
-  // device.
-  static std::unique_ptr<CertProvisioningInvalidationHandler> BuildAndRegister(
-      CertScope scope,
-      invalidation::InvalidationService* invalidation_service,
-      const invalidation::Topic& topic,
-      OnInvalidationCallback on_invalidation_callback);
-
+  // Creates and registers the handler to `invalidation_listener`
+  // with `listener_type`.
+  // `on_invalidation_event_callback` will be called when incoming invalidation
+  // is received.
   CertProvisioningInvalidationHandler(
-      CertScope scope,
-      invalidation::InvalidationService* invalidation_service,
-      const invalidation::Topic& topic,
-      OnInvalidationCallback on_invalidation_callback);
+      invalidation::InvalidationListener* invalidation_listener,
+      const std::string& listener_type,
+      OnInvalidationEventCallback on_invalidation_event_callback);
   CertProvisioningInvalidationHandler(
       const CertProvisioningInvalidationHandler&) = delete;
   CertProvisioningInvalidationHandler& operator=(
@@ -60,54 +56,43 @@ class CertProvisioningInvalidationHandler
 
   ~CertProvisioningInvalidationHandler() override;
 
-  // Unregisters handler and unsubscribes given topic from invalidation service.
-  void Unregister();
-
-  // invalidation::InvalidationHandler:
-  void OnInvalidatorStateChange(invalidation::InvalidatorState state) override;
-  void OnIncomingInvalidation(
-      const invalidation::TopicInvalidationMap& invalidation_map) override;
-  std::string GetOwnerName() const override;
-  bool IsPublicTopic(const invalidation::Topic& topic) const override;
+  // invalidation::InvalidationListener::Observer
+  void OnExpectationChanged(
+      invalidation::InvalidationsExpected expected) override;
+  void OnInvalidationReceived(
+      const invalidation::DirectInvalidation& invalidation) override;
+  std::string GetType() const override;
 
  private:
-  // Registers the handler to |invalidation_service_| and subscribes with
-  // |topic_|.
-  // Returns true if registered successfully or if already registered,
-  // false otherwise.
-  bool Register();
+  // Returns true if ready to receive invalidations.
+  bool IsRegistered() const;
+
+  // Returns true if ready to receive invalidations and invalidations are
+  // enabled.
+  bool AreInvalidationsEnabled() const;
 
   // Sequence checker to ensure that calls from invalidation service are
   // consecutive.
   SEQUENCE_CHECKER(sequence_checker_);
 
-  struct State {
-    bool is_registered;
-    bool is_invalidation_service_enabled;
-  };
-
-  // Represents state of current handler: whether invalidation service is
-  // enabled and whether handler is registered.
-  State state_{false, false};
-
-  // Represents a handler's scope: user or device.
-  const CertScope scope_;
-
   // An invalidation service providing the handler with incoming invalidations.
-  invalidation::InvalidationService* const invalidation_service_;
+  const raw_ptr<invalidation::InvalidationListener> invalidation_listener_;
 
-  // A topic representing certificate invalidations.
-  const invalidation::Topic topic_;
+  // A listener type for routing FCM invalidations.
+  const std::string listener_type_;
+
+  invalidation::InvalidationsExpected are_invalidations_expected_ =
+      invalidation::InvalidationsExpected::kMaybe;
 
   // A callback to be called on incoming invalidation event.
-  const OnInvalidationCallback on_invalidation_callback_;
+  const OnInvalidationEventCallback on_invalidation_event_callback_;
 
   // Automatically unregisters `this` as an observer on destruction. Should be
   // destroyed first so the other fields are still valid and can be used during
   // the unregistration.
-  base::ScopedObservation<invalidation::InvalidationService,
-                          invalidation::InvalidationHandler>
-      invalidation_service_observation_{this};
+  base::ScopedObservation<invalidation::InvalidationListener,
+                          invalidation::InvalidationListener::Observer>
+      invalidation_listener_observation_{this};
 };
 
 }  // namespace internal
@@ -142,8 +127,9 @@ class CertProvisioningInvalidator {
       delete;
   virtual ~CertProvisioningInvalidator();
 
-  virtual void Register(const invalidation::Topic& topic,
-                        OnInvalidationCallback on_invalidation_callback) = 0;
+  virtual void Register(
+      const std::string& listener_type,
+      OnInvalidationEventCallback on_invalidation_event_callback) = 0;
   virtual void Unregister();
 
  protected:
@@ -154,7 +140,7 @@ class CertProvisioningInvalidator {
 //=============== CertProvisioningUserInvalidatorFactory =======================
 
 // This factory creates CertProvisioningInvalidators that use the passed user
-// Profile's InvalidationService.
+// Profile's `InvalidationListener`.
 class CertProvisioningUserInvalidatorFactory
     : public CertProvisioningInvalidatorFactory {
  public:
@@ -162,7 +148,7 @@ class CertProvisioningUserInvalidatorFactory
   std::unique_ptr<CertProvisioningInvalidator> Create() override;
 
  private:
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
 };
 
 //=============== CertProvisioningUserInvalidator ==============================
@@ -171,50 +157,48 @@ class CertProvisioningUserInvalidator : public CertProvisioningInvalidator {
  public:
   explicit CertProvisioningUserInvalidator(Profile* profile);
 
-  void Register(const invalidation::Topic& topic,
-                OnInvalidationCallback on_invalidation_callback) override;
+  void Register(
+      const std::string& listener_type,
+      OnInvalidationEventCallback on_invalidation_event_callback) override;
 
  private:
-  Profile* profile_ = nullptr;
+  raw_ptr<Profile> profile_ = nullptr;
 };
 
 //=============== CertProvisioningDeviceInvalidatorFactory =====================
 
 // This factory creates CertProvisioningInvalidators that use the device-wide
-// InvalidationService.
+// `InvalidationListener`.
 class CertProvisioningDeviceInvalidatorFactory
     : public CertProvisioningInvalidatorFactory {
  public:
+  CertProvisioningDeviceInvalidatorFactory();
+  ~CertProvisioningDeviceInvalidatorFactory() override;
+
   explicit CertProvisioningDeviceInvalidatorFactory(
-      policy::AffiliatedInvalidationServiceProvider* service_provider);
+      invalidation::InvalidationListener* invalidation__listener);
   std::unique_ptr<CertProvisioningInvalidator> Create() override;
 
  private:
-  policy::AffiliatedInvalidationServiceProvider* service_provider_ = nullptr;
+  raw_ptr<invalidation::InvalidationListener> invalidation_listener_;
 };
 
 //=============== CertProvisioningDeviceInvalidator ============================
 
-class CertProvisioningDeviceInvalidator
-    : public CertProvisioningInvalidator,
-      public policy::AffiliatedInvalidationServiceProvider::Consumer {
+class CertProvisioningDeviceInvalidator : public CertProvisioningInvalidator {
  public:
   explicit CertProvisioningDeviceInvalidator(
-      policy::AffiliatedInvalidationServiceProvider* service_provider);
+      invalidation::InvalidationListener* invalidation_listener);
   ~CertProvisioningDeviceInvalidator() override;
 
-  void Register(const invalidation::Topic& topic,
-                OnInvalidationCallback on_invalidation_callback) override;
-  void Unregister() override;
+  void Register(
+      const std::string& listener_type,
+      OnInvalidationEventCallback on_invalidation_event_callback) override;
 
  private:
-  // policy::AffiliatedInvalidationServiceProvider::Consumer
-  void OnInvalidationServiceSet(
-      invalidation::InvalidationService* invalidation_service) override;
-
-  invalidation::Topic topic_;
-  OnInvalidationCallback on_invalidation_callback_;
-  policy::AffiliatedInvalidationServiceProvider* service_provider_ = nullptr;
+  std::string listener_type_;
+  OnInvalidationEventCallback on_invalidation_event_callback_;
+  raw_ptr<invalidation::InvalidationListener> invalidation_listener_;
 };
 
 }  // namespace ash::cert_provisioning

@@ -7,13 +7,12 @@
 #include <string>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
-#include "chrome/test/chromedriver/chrome/browser_info.h"
 #include "chrome/test/chromedriver/chrome/chrome.h"
 #include "chrome/test/chromedriver/chrome/devtools_client.h"
 #include "chrome/test/chromedriver/chrome/devtools_client_impl.h"
@@ -99,6 +98,10 @@ Status PerformanceLogger::OnConnected(DevToolsClient* client) {
       return Status(kOk);
     return StartTrace();
   }
+  if (client->IsTabTarget()) {
+    // Tab Targets do not support Network.enable
+    return Status(kOk);
+  }
   return EnableInspectorDomains(client);
 }
 
@@ -119,9 +122,9 @@ Status PerformanceLogger::OnEvent(DevToolsClient* client,
                       "missing target ID in Target.attachedToTarget event");
       }
 
-      std::list<std::string> webview_ids;
-      Status status = session_->chrome->GetWebViewIds(&webview_ids,
-                                                      session_->w3c_compliant);
+      std::list<std::string> tabview_ids;
+      Status status = session_->chrome->GetTopLevelWebViewIds(
+          &tabview_ids, session_->w3c_compliant);
       if (status.IsError())
         return status;
 
@@ -157,8 +160,7 @@ void PerformanceLogger::AddLogEntry(Log::Level level,
   log_message_dict.Set("webview", webview);
   log_message_dict.SetByDottedPath("message.method", method);
   log_message_dict.SetByDottedPath("message.params", params.Clone());
-  std::string log_message_json;
-  base::JSONWriter::Write(log_message_dict, &log_message_json);
+  std::string log_message_json = base::WriteJson(log_message_dict).value_or("");
 
   // TODO(klm): extract timestamp from params?
   // Look at where it is for Page, Network, and trace events.
@@ -175,10 +177,6 @@ Status PerformanceLogger::EnableInspectorDomains(DevToolsClient* client) {
   std::vector<std::string> enable_commands;
   if (IsEnabled(prefs_.network)) {
     enable_commands.push_back("Network.enable");
-  }
-  if (IsEnabled(prefs_.page) && (client->GetOwner() == nullptr ||
-                                 !client->GetOwner()->IsServiceWorker())) {
-    enable_commands.push_back("Page.enable");
   }
   for (const auto& enable_command : enable_commands) {
     base::Value::Dict params;  // All the enable commands have empty params.
@@ -222,8 +220,7 @@ Status PerformanceLogger::HandleTraceEvents(DevToolsClient* client,
   } else if (method == "Tracing.bufferUsage") {
     // 'value' will be between 0-1 and represents how full the DevTools trace
     // buffer is. If the buffer is full, warn the user.
-    absl::optional<double> maybe_buffer_usage =
-        params.FindDouble("percentFull");
+    std::optional<double> maybe_buffer_usage = params.FindDouble("percentFull");
     if (!maybe_buffer_usage.has_value()) {
       // Tracing.bufferUsage event will occur once per second, and it really
       // only serves as a warning, so if we can't reliably tell whether the

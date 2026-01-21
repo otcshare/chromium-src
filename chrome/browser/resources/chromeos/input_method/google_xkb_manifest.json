@@ -5,6 +5,8 @@
   "default_locale": "en",
   "incognito": "split",
   "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC7C0oB6YTnf69uhWnVTZl5TB/psHrJXgIPLYchFb0whlVCG8fqMo9lW/oxBmZXZ3N8T7zZrdYI/SUjoc9I5R/dMVVD2q4iKox+x7xlTbqSdVeOb6b9ZVJ24pLbO1L7feSNSBgR0t61jrC2eY/gf78h7w58UEQBPFT2mUxhhwodyQIDAQAB",
+
+
   "permissions": [
     "accessibilityFeatures.read",
     "app.window.alpha",
@@ -12,10 +14,6 @@
     "app.window.ime",
     "audioCapture",
     "crashReportPrivate",
-    "https://clients4.google.com/",
-    "https://dl.google.com/",
-    "https://handwriting.googleapis.com/",
-    "https://www.googleapis.com/",
     "input",
     "inputMethodPrivate",
     "metricsPrivate",
@@ -26,10 +24,13 @@
     "unlimitedStorage",
     "virtualKeyboardPrivate"
   ],
-  "background": {
-    "page": "background.html",
-    "persistent": false
-  },
+  "host_permissions": [
+    "https://clients4.google.com/",
+    "https://dl.google.com/",
+    "https://edgedl.me.gvt1.com/",
+    "https://handwriting.googleapis.com/",
+    "https://www.googleapis.com/"
+  ],
   "content_scripts": [
   ],
   "ime_path": "/usr/share/chromeos-assets/input_methods/input_tools",
@@ -45,8 +46,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us::eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_indonesian__",
@@ -57,8 +57,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us::ind"
+      ]
     },
     {
       "name": "__MSG_keyboard_filipino__",
@@ -69,8 +68,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us::fil"
+      ]
     },
     {
       "name": "__MSG_keyboard_malay__",
@@ -81,8 +79,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us::msa"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_international__",
@@ -94,8 +91,7 @@
       ],
       "layouts": [
         "us(intl)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:intl:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_international_pc__",
@@ -107,8 +103,7 @@
       ],
       "layouts": [
         "us(intl_pc)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:intl_pc:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_netherlands__",
@@ -119,8 +114,7 @@
       ],
       "layouts": [
         "us(intl)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:intl:nld"
+      ]
     },
     {
       "name": "__MSG_keyboard_netherlands_us_international_pc__",
@@ -131,8 +125,7 @@
       ],
       "layouts": [
         "us(intl_pc)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:intl_pc:nld"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_extended__",
@@ -144,8 +137,7 @@
       ],
       "layouts": [
         "us(altgr-intl)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:altgr-intl:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_dvorak__",
@@ -157,8 +149,7 @@
       ],
       "layouts": [
         "us(dvorak)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:dvorak:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_dvp__",
@@ -170,8 +161,7 @@
       ],
       "layouts": [
         "us(dvp)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:dvp:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_colemak__",
@@ -183,8 +173,7 @@
       ],
       "layouts": [
         "us(colemak)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:colemak:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_workman__",
@@ -196,8 +185,7 @@
       ],
       "layouts": [
         "us(workman)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:workman:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_us_workman_international__",
@@ -209,8 +197,7 @@
       ],
       "layouts": [
         "us(workman-intl)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:workman-intl:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_belgian_dutch__",
@@ -220,8 +207,7 @@
       ],
       "layouts": [
         "be"
-      ],
-      "options_page": "hmm_options.html?code=xkb:be::nld"
+      ]
     },
     {
       "name": "__MSG_keyboard_french__",
@@ -232,8 +218,7 @@
       ],
       "layouts": [
         "fr(oss)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:fr::fra"
+      ]
     },
     {
       "name": "__MSG_keyboard_french_bepo__",
@@ -244,8 +229,7 @@
       ],
       "layouts": [
         "fr(bepo)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:fr:bepo:fra"
+      ]
     },
     {
       "name": "__MSG_keyboard_belgian_french__",
@@ -255,8 +239,7 @@
       ],
       "layouts": [
         "be"
-      ],
-      "options_page": "hmm_options.html?code=xkb:be::fra"
+      ]
     },
     {
       "name": "__MSG_keyboard_faroese__",
@@ -266,8 +249,7 @@
       ],
       "layouts": [
         "fo"
-      ],
-      "options_page": "hmm_options.html?code=xkb:fo::fao"
+      ]
     },
     {
       "name": "__MSG_keyboard_canadian_french__",
@@ -278,8 +260,7 @@
       ],
       "layouts": [
         "ca"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ca::fra"
+      ]
     },
     {
       "name": "__MSG_keyboard_swiss_french__",
@@ -290,8 +271,7 @@
       ],
       "layouts": [
         "ch(fr)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ch:fr:fra"
+      ]
     },
     {
       "name": "__MSG_keyboard_canadian_multilingual__",
@@ -302,8 +282,7 @@
       ],
       "layouts": [
         "ca(multix)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ca:multix:fra"
+      ]
     },
     {
       "name": "__MSG_keyboard_german__",
@@ -316,8 +295,7 @@
       ],
       "layouts": [
         "de"
-      ],
-      "options_page": "hmm_options.html?code=xkb:de::ger"
+      ]
     },
     {
       "name": "__MSG_keyboard_german_neo_2__",
@@ -331,8 +309,7 @@
       ],
       "layouts": [
         "de(neo)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:de:neo:ger"
+      ]
     },
     {
       "name": "__MSG_keyboard_belgian_german__",
@@ -342,8 +319,7 @@
       ],
       "layouts": [
         "be"
-      ],
-      "options_page": "hmm_options.html?code=xkb:be::ger"
+      ]
     },
     {
       "name": "__MSG_keyboard_swiss__",
@@ -354,8 +330,7 @@
       ],
       "layouts": [
         "ch"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ch::ger"
+      ]
     },
     {
       "name": "__MSG_keyboard_japanese__",
@@ -366,8 +341,7 @@
       ],
       "layouts": [
         "jp"
-      ],
-      "options_page": "hmm_options.html?code=xkb:jp::jpn"
+      ]
     },
     {
       "name": "__MSG_keyboard_russian__",
@@ -377,8 +351,7 @@
       ],
       "layouts": [
         "ru"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ru::rus"
+      ]
     },
     {
       "name": "__MSG_keyboard_russian_phonetic__",
@@ -388,8 +361,7 @@
       ],
       "layouts": [
         "ru(phonetic)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ru:phonetic:rus"
+      ]
     },
     {
       "name": "__MSG_keyboard_brazilian__",
@@ -400,8 +372,7 @@
       ],
       "layouts": [
         "br"
-      ],
-      "options_page": "hmm_options.html?code=xkb:br::por"
+      ]
     },
     {
       "name": "__MSG_keyboard_portuguese_us_international__",
@@ -412,8 +383,7 @@
       ],
       "layouts": [
         "us(intl)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:intl:por"
+      ]
     },
     {
       "name": "__MSG_keyboard_portuguese_us_international_pc__",
@@ -424,8 +394,7 @@
       ],
       "layouts": [
         "us(intl_pc)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:us:intl_pc:por"
+      ]
     },
     {
       "name": "__MSG_keyboard_bulgarian__",
@@ -435,8 +404,7 @@
       ],
       "layouts": [
         "bg"
-      ],
-      "options_page": "hmm_options.html?code=xkb:bg::bul"
+      ]
     },
     {
       "name": "__MSG_keyboard_bulgarian_phonetic__",
@@ -446,8 +414,7 @@
       ],
       "layouts": [
         "bg(phonetic)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:bg:phonetic:bul"
+      ]
     },
     {
       "name": "__MSG_keyboard_canadian_english__",
@@ -458,8 +425,7 @@
       ],
       "layouts": [
         "ca(eng)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ca:eng:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_czech__",
@@ -469,8 +435,7 @@
       ],
       "layouts": [
         "cz"
-      ],
-      "options_page": "hmm_options.html?code=xkb:cz::cze"
+      ]
     },
     {
       "name": "__MSG_keyboard_czech_qwerty__",
@@ -481,8 +446,7 @@
       ],
       "layouts": [
         "cz(qwerty)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:cz:qwerty:cze"
+      ]
     },
     {
       "name": "__MSG_keyboard_estonian__",
@@ -492,8 +456,7 @@
       ],
       "layouts": [
         "ee"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ee::est"
+      ]
     },
     {
       "name": "__MSG_keyboard_spanish__",
@@ -504,8 +467,7 @@
       ],
       "layouts": [
         "es"
-      ],
-      "options_page": "hmm_options.html?code=xkb:es::spa"
+      ]
     },
     {
       "name": "__MSG_keyboard_catalan__",
@@ -516,8 +478,7 @@
       ],
       "layouts": [
         "es(cat)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:es:cat:cat"
+      ]
     },
     {
       "name": "__MSG_keyboard_danish__",
@@ -527,8 +488,7 @@
       ],
       "layouts": [
         "dk"
-      ],
-      "options_page": "hmm_options.html?code=xkb:dk::dan"
+      ]
     },
     {
       "name": "__MSG_keyboard_greek__",
@@ -538,8 +498,7 @@
       ],
       "layouts": [
         "gr"
-      ],
-      "options_page": "hmm_options.html?code=xkb:gr::gre"
+      ]
     },
     {
       "name": "__MSG_keyboard_hebrew__",
@@ -549,8 +508,7 @@
       ],
       "layouts": [
         "il"
-      ],
-      "options_page": "hmm_options.html?code=xkb:il::heb"
+      ]
     },
     {
       "name": "__MSG_keyboard_latin_american__",
@@ -562,8 +520,7 @@
       ],
       "layouts": [
         "latam"
-      ],
-      "options_page": "hmm_options.html?code=xkb:latam::spa"
+      ]
     },
     {
       "name": "__MSG_keyboard_lithuanian__",
@@ -573,8 +530,7 @@
       ],
       "layouts": [
         "lt"
-      ],
-      "options_page": "hmm_options.html?code=xkb:lt::lit"
+      ]
     },
     {
       "name": "__MSG_keyboard_latvian__",
@@ -584,8 +540,7 @@
       ],
       "layouts": [
         "lv(apostrophe)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:lv:apostrophe:lav"
+      ]
     },
     {
       "name": "__MSG_keyboard_croatian__",
@@ -595,8 +550,7 @@
       ],
       "layouts": [
         "hr"
-      ],
-      "options_page": "hmm_options.html?code=xkb:hr::scr"
+      ]
     },
     {
       "name": "__MSG_keyboard_uk__",
@@ -607,8 +561,19 @@
       ],
       "layouts": [
         "gb(extd)"
+      ]
+    },
+    {
+      "name": "__MSG_keyboard_english_india__",
+      "id": "xkb:in::eng",
+      "indicator": "IN",
+      "language": [
+        "en",
+        "en-IN"
       ],
-      "options_page": "hmm_options.html?code=xkb:gb:extd:eng"
+      "layouts": [
+        "in(eng)"
+      ]
     },
     {
       "name": "__MSG_keyboard_english_pakistan__",
@@ -620,8 +585,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=xkb:pk::eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_english_south_africa__",
@@ -633,8 +597,7 @@
       ],
       "layouts": [
         "gb(extd)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:za:gb:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_uk_dvorak__",
@@ -646,8 +609,7 @@
       ],
       "layouts": [
         "gb(dvorak)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:gb:dvorak:eng"
+      ]
     },
     {
       "name": "__MSG_keyboard_finnish__",
@@ -657,8 +619,7 @@
       ],
       "layouts": [
         "fi"
-      ],
-      "options_page": "hmm_options.html?code=xkb:fi::fin"
+      ]
     },
     {
       "name": "__MSG_keyboard_hungarian__",
@@ -668,8 +629,7 @@
       ],
       "layouts": [
         "hu"
-      ],
-      "options_page": "hmm_options.html?code=xkb:hu::hun"
+      ]
     },
     {
       "name": "__MSG_keyboard_hungarian_qwerty__",
@@ -679,8 +639,7 @@
       ],
       "layouts": [
         "hu(qwerty)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:hu:qwerty:hun"
+      ]
     },
     {
       "name": "__MSG_keyboard_italian__",
@@ -691,8 +650,7 @@
       ],
       "layouts": [
         "it"
-      ],
-      "options_page": "hmm_options.html?code=xkb:it::ita"
+      ]
     },
     {
       "name": "__MSG_keyboard_icelandic__",
@@ -702,8 +660,7 @@
       ],
       "layouts": [
         "is"
-      ],
-      "options_page": "hmm_options.html?code=xkb:is::ice"
+      ]
     },
     {
       "name": "__MSG_keyboard_norwegian__",
@@ -715,8 +672,7 @@
       ],
       "layouts": [
         "no"
-      ],
-      "options_page": "hmm_options.html?code=xkb:no::nob"
+      ]
     },
     {
       "name": "__MSG_keyboard_polish__",
@@ -726,8 +682,7 @@
       ],
       "layouts": [
         "pl"
-      ],
-      "options_page": "hmm_options.html?code=xkb:pl::pol"
+      ]
     },
     {
       "name": "__MSG_keyboard_portuguese__",
@@ -738,8 +693,7 @@
       ],
       "layouts": [
         "pt"
-      ],
-      "options_page": "hmm_options.html?code=xkb:pt::por"
+      ]
     },
     {
       "name": "__MSG_keyboard_romanian__",
@@ -749,8 +703,7 @@
       ],
       "layouts": [
         "ro"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ro::rum"
+      ]
     },
     {
       "name": "__MSG_keyboard_romanian_standard__",
@@ -760,8 +713,7 @@
       ],
       "layouts": [
         "ro(std)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ro:std:rum"
+      ]
     },
     {
       "name": "__MSG_keyboard_swedish__",
@@ -771,8 +723,7 @@
       ],
       "layouts": [
         "se"
-      ],
-      "options_page": "hmm_options.html?code=xkb:se::swe"
+      ]
     },
     {
       "name": "__MSG_keyboard_slovak__",
@@ -782,8 +733,7 @@
       ],
       "layouts": [
         "sk"
-      ],
-      "options_page": "hmm_options.html?code=xkb:sk::slo"
+      ]
     },
     {
       "name": "__MSG_keyboard_slovenian__",
@@ -793,8 +743,7 @@
       ],
       "layouts": [
         "si"
-      ],
-      "options_page": "hmm_options.html?code=xkb:si::slv"
+      ]
     },
     {
       "name": "__MSG_keyboard_serbian__",
@@ -804,8 +753,7 @@
       ],
       "layouts": [
         "rs"
-      ],
-      "options_page": "hmm_options.html?code=xkb:rs::srp"
+      ]
     },
     {
       "name": "__MSG_keyboard_turkish__",
@@ -815,8 +763,7 @@
       ],
       "layouts": [
         "tr"
-      ],
-      "options_page": "hmm_options.html?code=xkb:tr::tur"
+      ]
     },
     {
       "name": "__MSG_keyboard_turkish_f__",
@@ -826,8 +773,7 @@
       ],
       "layouts": [
         "tr(f)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:tr:f:tur"
+      ]
     },
     {
       "name": "__MSG_keyboard_ukrainian__",
@@ -837,8 +783,7 @@
       ],
       "layouts": [
         "ua"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ua::ukr"
+      ]
     },
     {
       "name": "__MSG_keyboard_belarusian__",
@@ -848,8 +793,7 @@
       ],
       "layouts": [
         "by"
-      ],
-      "options_page": "hmm_options.html?code=xkb:by::bel"
+      ]
     },
     {
       "name": "__MSG_keyboard_armenian_phonetic__",
@@ -859,8 +803,7 @@
       ],
       "layouts": [
         "am(phonetic)"
-      ],
-      "options_page": "hmm_options.html?code=xkb:am:phonetic:arm"
+      ]
     },
     {
       "name": "__MSG_keyboard_georgian__",
@@ -870,8 +813,7 @@
       ],
       "layouts": [
         "ge"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ge::geo"
+      ]
     },
     {
       "name": "__MSG_keyboard_mongolian__",
@@ -881,8 +823,7 @@
       ],
       "layouts": [
         "mn"
-      ],
-      "options_page": "hmm_options.html?code=xkb:mn::mon"
+      ]
     },
     {
       "name": "__MSG_keyboard_irish__",
@@ -892,8 +833,7 @@
       ],
       "layouts": [
         "ie"
-      ],
-      "options_page": "hmm_options.html?code=xkb:ie::ga"
+      ]
     },
     {
       "name": "__MSG_keyboard_maltese__",
@@ -903,8 +843,7 @@
       ],
       "layouts": [
         "mt"
-      ],
-      "options_page": "hmm_options.html?code=xkb:mt::mlt"
+      ]
     },
     {
       "name": "__MSG_keyboard_macedonian__",
@@ -914,8 +853,7 @@
       ],
       "layouts": [
         "mk"
-      ],
-      "options_page": "hmm_options.html?code=xkb:mk::mkd"
+      ]
     },
     {
       "name": "__MSG_keyboard_kazakh__",
@@ -925,8 +863,7 @@
       ],
       "layouts": [
         "kz"
-      ],
-      "options_page": "hmm_options.html?code=xkb:kz::kaz"
+      ]
     },
     {
       "name": "__MSG_inputmethod_pinyin__",
@@ -938,8 +875,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=zh-t-i0-pinyin"
+      ]
     },
     {
       "name": "__MSG_inputmethod_traditional_pinyin__",
@@ -951,8 +887,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=zh-hant-t-i0-pinyin"
+      ]
     },
     {
       "name": "__MSG_inputmethod_cangjie__",
@@ -1035,8 +970,7 @@
       ],
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=zh-hant-t-i0-und"
+      ]
     },
     {
       "name": "__MSG_transliteration_am__",
@@ -1205,8 +1139,7 @@
       "language": "ko",
       "layouts": [
         "us"
-      ],
-      "options_page": "hmm_options.html?code=ko-t-i0-und"
+      ]
     },
     {
       "name": "__MSG_inputmethod_mozc_us__",
@@ -1215,8 +1148,7 @@
       "language": "ja",
       "layouts": [
         "us"
-      ],
-      "options_page": "mozc_option.html"
+      ]
     },
     {
       "name": "__MSG_inputmethod_mozc_jp__",
@@ -1225,8 +1157,7 @@
       "language": "ja",
       "layouts": [
         "jp"
-      ],
-      "options_page": "mozc_option.html"
+      ]
     },
     {
       "name": "__MSG_keyboard_bengali_phonetic__",
@@ -1235,7 +1166,7 @@
         "bn"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1245,7 +1176,7 @@
         "gu"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1267,7 +1198,7 @@
         "hi"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1297,7 +1228,7 @@
         "ta"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1307,7 +1238,7 @@
         "ta"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1357,7 +1288,7 @@
         "am"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1367,7 +1298,7 @@
         "th"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1397,7 +1328,7 @@
         "fa"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1457,7 +1388,7 @@
         "lo"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1487,7 +1418,7 @@
         "km"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1507,7 +1438,7 @@
         "si"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1547,7 +1478,7 @@
         "ru"
       ],
       "layouts": [
-        "us"
+        "us(noop-altgr)"
       ]
     },
     {
@@ -1557,160 +1488,10 @@
         "ru"
       ],
       "layouts": [
-        "us"
-      ]
-    },
-    {
-      "name": "Dutch with US keyboard",
-      "id": "experimental_layout-us_lang-nl",
-      "language": [
-        "nl"
-      ],
-      "layouts": [
-        "us"
-      ]
-    },
-    {
-      "name": "Spanish (Spain) with US keyboard",
-      "id": "experimental_layout-us_lang-es-ES",
-      "language": [
-        "es-ES"
-      ],
-      "layouts": [
-        "us"
-      ]
-    },
-    {
-      "name": "Swedish with US keyboard",
-      "id": "experimental_layout-us_lang-sv",
-      "language": [
-        "sv"
-      ],
-      "layouts": [
-        "us"
-      ]
-    },
-    {
-      "name": "French (France) with US keyboard",
-      "id": "experimental_layout-us_lang-fr-FR",
-      "language": [
-        "fr-FR"
-      ],
-      "layouts": [
-        "us"
-      ]
-    },
-    {
-      "name": "French (Canada) with US keyboard",
-      "id": "experimental_layout-us_lang-fr-CA",
-      "language": [
-        "fr-CA"
-      ],
-      "layouts": [
-        "us"
-      ]
-    },
-    {
-      "name": "Dutch with UK keyboard",
-      "id": "experimental_layout-gb(extd)_lang-nl",
-      "language": [
-        "nl"
-      ],
-      "layouts": [
-        "gb(extd)"
-      ]
-    },
-    {
-      "name": "Spanish (Spain) with UK keyboard",
-      "id": "experimental_layout-gb(extd)_lang-es-ES",
-      "language": [
-        "es-ES"
-      ],
-      "layouts": [
-        "gb(extd)"
-      ]
-    },
-    {
-      "name": "Swedish with UK keyboard",
-      "id": "experimental_layout-gb(extd)_lang-sv",
-      "language": [
-        "sv"
-      ],
-      "layouts": [
-        "gb(extd)"
-      ]
-    },
-    {
-      "name": "French (France) with UK keyboard",
-      "id": "experimental_layout-gb(extd)_lang-fr-FR",
-      "language": [
-        "fr-FR"
-      ],
-      "layouts": [
-        "gb(extd)"
-      ]
-    },
-    {
-      "name": "Swedish with Norwegian keyboard",
-      "id": "experimental_layout-no_lang-sv",
-      "language": [
-        "sv"
-      ],
-      "layouts": [
-        "no"
-      ]
-    },
-    {
-      "name": "Danish with Norwegian keyboard",
-      "id": "experimental_layout-no_lang-da",
-      "language": [
-        "da"
-      ],
-      "layouts": [
-        "no"
-      ]
-    },
-    {
-      "name": "Norwegian with Swedish keyboard",
-      "id": "experimental_layout-se_lang-no",
-      "language": [
-        "no"
-      ],
-      "layouts": [
-        "se"
-      ]
-    },
-    {
-      "name": "Danish with Swedish keyboard",
-      "id": "experimental_layout-se_lang-da",
-      "language": [
-        "da"
-      ],
-      "layouts": [
-        "se"
-      ]
-    },
-    {
-      "name": "Norwegian with Danish keyboard",
-      "id": "experimental_layout-dk_lang-no",
-      "language": [
-        "no"
-      ],
-      "layouts": [
-        "dk"
-      ]
-    },
-    {
-      "name": "Swedish with Danish keyboard",
-      "id": "experimental_layout-dk_lang-sv",
-      "language": [
-        "sv"
-      ],
-      "layouts": [
-        "dk"
+        "us(noop-altgr)"
       ]
     }
   ],
-  "manifest_version": 2,
-  "content_security_policy": "script-src 'self' 'wasm-eval'; object-src 'self'; style-src 'unsafe-inline' chrome://theme"
+  "manifest_version": 3,
+  "content_security_policy": {"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; style-src 'unsafe-inline' chrome://theme"}
 }

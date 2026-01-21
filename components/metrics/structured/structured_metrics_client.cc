@@ -7,10 +7,10 @@
 #include <utility>
 
 #include "base/no_destructor.h"
+#include "base/system/sys_info.h"
 #include "components/metrics/structured/event.h"
 
-namespace metrics {
-namespace structured {
+namespace metrics::structured {
 
 StructuredMetricsClient::StructuredMetricsClient() = default;
 StructuredMetricsClient::~StructuredMetricsClient() = default;
@@ -21,16 +21,20 @@ StructuredMetricsClient* StructuredMetricsClient::Get() {
   return client.get();
 }
 
+// static
 void StructuredMetricsClient::Record(Event&& event) {
-  if (delegate_ && delegate_->IsReadyToRecord()) {
-    delegating_events_processor_.OnEventsRecord(&event);
-    delegate_->RecordEvent(std::move(event));
-  }
+  StructuredMetricsClient::Get()->RecordEvent(std::move(event));
 }
 
-void StructuredMetricsClient::AddEventsProcessor(
-    std::unique_ptr<EventsProcessorInterface> events_processor) {
-  delegating_events_processor_.AddEventsProcessor(std::move(events_processor));
+void StructuredMetricsClient::RecordEvent(Event&& event) {
+  // Records uptime if event sequence type and it has not been explicitly set.
+  if (event.IsEventSequenceType() && !event.has_system_uptime()) {
+    event.SetRecordedTimeSinceBoot(base::SysInfo::Uptime());
+  }
+
+  if (delegate_ && delegate_->IsReadyToRecord()) {
+    delegate_->RecordEvent(std::move(event));
+  }
 }
 
 void StructuredMetricsClient::SetDelegate(RecordingDelegate* delegate) {
@@ -41,5 +45,4 @@ void StructuredMetricsClient::UnsetDelegate() {
   delegate_ = nullptr;
 }
 
-}  // namespace structured
-}  // namespace metrics
+}  // namespace metrics::structured

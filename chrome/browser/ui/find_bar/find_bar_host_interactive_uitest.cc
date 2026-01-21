@@ -2,10 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -25,23 +30,25 @@ using content::WebContents;
 namespace {
 
 const char kEndState[] = "/find_in_page/end_state.html";
+const char kSimple[] = "/find_in_page/simple.html";
 
 class FindInPageInteractiveTest : public InProcessBrowserTest {
  public:
-  FindInPageInteractiveTest() {
-  }
+  FindInPageInteractiveTest() = default;
 
   // Platform independent FindInPage that takes |const wchar_t*|
   // as an input.
   int FindInPageASCII(WebContents* web_contents,
-                      const base::StringPiece& search_str,
+                      std::string_view search_str,
                       bool forward,
                       bool case_sensitive,
                       int* ordinal) {
     std::u16string search_str16(base::ASCIIToUTF16(search_str));
-    Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
-    browser->GetFindBarController()->find_bar()->SetFindTextAndSelectedRange(
-        search_str16, gfx::Range());
+    Browser* browser = chrome::FindBrowserWithTab(web_contents);
+    browser->GetFeatures()
+        .GetFindBarController()
+        ->find_bar()
+        ->SetFindTextAndSelectedRange(search_str16, gfx::Range());
     return ui_test_utils::FindInPage(web_contents, search_str16, forward,
                                      case_sensitive, ordinal, nullptr);
   }
@@ -49,12 +56,8 @@ class FindInPageInteractiveTest : public InProcessBrowserTest {
 
 }  // namespace
 
-[[nodiscard]] bool FocusedOnPage(WebContents* web_contents,
-                                 std::string* result) {
-  return content::ExecuteScriptAndExtractString(
-      web_contents,
-      "window.domAutomationController.send(getFocusedElement());",
-      result);
+[[nodiscard]] std::string FocusedOnPage(WebContents* web_contents) {
+  return content::EvalJs(web_contents, "getFocusedElement();").ExtractString();
 }
 
 // This tests the FindInPage end-state, in other words: what is focused when you
@@ -78,38 +81,72 @@ IN_PROC_BROWSER_TEST_F(FindInPageInteractiveTest, FindInPageEndState) {
       find_in_page::FindTabHelper::FromWebContents(web_contents);
 
   // Verify that nothing has focus.
-  std::string result;
-  ASSERT_TRUE(FocusedOnPage(web_contents, &result));
-  ASSERT_STREQ("{nothing focused}", result.c_str());
+  ASSERT_EQ("{nothing focused}", FocusedOnPage(web_contents));
 
   // Search for a text that exists within a link on the page.
   int ordinal = 0;
-  EXPECT_EQ(1, FindInPageASCII(web_contents, "nk",
-                               true, false, &ordinal));
+  EXPECT_EQ(1, FindInPageASCII(web_contents, "nk", true, false, &ordinal));
   EXPECT_EQ(1, ordinal);
 
   // End the find session, which should set focus to the link.
   find_tab_helper->StopFinding(find_in_page::SelectionAction::kKeep);
 
   // Verify that the link is focused.
-  ASSERT_TRUE(FocusedOnPage(web_contents, &result));
-  EXPECT_STREQ("link1", result.c_str());
+  EXPECT_EQ("link1", FocusedOnPage(web_contents));
 
   // Search for a text that exists within a link on the page.
-  EXPECT_EQ(1, FindInPageASCII(web_contents, "Google",
-                               true, false, &ordinal));
+  EXPECT_EQ(1, FindInPageASCII(web_contents, "Google", true, false, &ordinal));
   EXPECT_EQ(1, ordinal);
 
   // Move the selection to link 1, after searching.
-  ASSERT_TRUE(content::ExecuteScriptAndExtractString(
-      web_contents,
-      "window.domAutomationController.send(selectLink1());",
-      &result));
+  EXPECT_TRUE(content::ExecJs(web_contents, "selectLink1();"));
 
   // End the find session.
   find_tab_helper->StopFinding(find_in_page::SelectionAction::kKeep);
 
   // Verify that link2 is not focused.
-  ASSERT_TRUE(FocusedOnPage(web_contents, &result));
-  EXPECT_STREQ("", result.c_str());
+  EXPECT_EQ("", FocusedOnPage(web_contents));
+}
+
+// Tests that opening and closing the Find bar triggers the correct focus
+// events.
+// - Opening find bar: OnWebContentsLostFocus called once, OnWebContentsFocused
+//   NOT called
+// - Closing find bar: OnWebContentsFocused called once, OnWebContentsLostFocus
+//   NOT called
+IN_PROC_BROWSER_TEST_F(FindInPageInteractiveTest, FindBarFocusEvents) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  // Make sure Chrome is in the foreground.
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  // Navigate to a simple test page.
+  GURL url = embedded_test_server()->GetURL(kSimple);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
+
+  // Create focus event tracker.
+  ui_test_utils::WebContentsFocusEventTracker focus_tracker(web_contents);
+
+  // Open the find bar.
+  chrome::Find(browser());
+  // Wait for the lost focus event to be processed correctly.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return focus_tracker.lost_focus_count() == 1 &&
+           focus_tracker.focused_count() == 0;
+  }));
+
+  // Reset tracker for the close operation.
+  focus_tracker.Reset();
+  // Close the find bar.
+  browser()->GetFeatures().GetFindBarController()->EndFindSession(
+      find_in_page::SelectionAction::kKeep, find_in_page::ResultAction::kKeep);
+  // Wait for the focus event to be processed correctly.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return focus_tracker.focused_count() == 1 &&
+           focus_tracker.lost_focus_count() == 0;
+  }));
 }

@@ -6,6 +6,8 @@ import("//build/rust/rust_macro.gni")
 import("//build/rust/rust_static_library.gni")
 import("//testing/test.gni")
 
+# //testing is used outside of the chromium tree in other projects, and they
+# may not support the use of Rust and set `enable_rust = false`.
 if (enable_rust) {
   group("rust_gtest_interop") {
     testonly = true
@@ -13,6 +15,10 @@ if (enable_rust) {
       ":rust_gtest_interop_cpp",
       ":rust_gtest_interop_rust",
     ]
+
+    # TODO(crbug.com/462501862): This is needed to disable the tests if ASAN
+    # is enabled on macs. It can be removed once that's fixed.
+    public_configs = [ "//base:sanitizer_buildflags_rust_cfg" ]
   }
 
   static_library("rust_gtest_interop_cpp") {
@@ -22,7 +28,10 @@ if (enable_rust) {
       "rust_gtest_interop.cc",
       "rust_gtest_interop.h",
     ]
-    deps = [ "//testing/gtest" ]
+    deps = [
+      "//base",
+      "//testing/gtest",
+    ]
   }
 
   rust_static_library("rust_gtest_interop_rust") {
@@ -30,6 +39,7 @@ if (enable_rust) {
     visibility = [ ":rust_gtest_interop" ]
     crate_name = "rust_gtest_interop"
     crate_root = "rust_gtest_interop.rs"
+    allow_unsafe = true
     sources = [
       "expect_macros.rs",
       "rust_gtest_interop.rs",
@@ -40,7 +50,7 @@ if (enable_rust) {
       ":gtest_attribute",
 
       # This is re-exported for the gtest_attribute macros.
-      "//third_party/rust/small_ctor/v0_1:test_support",
+      "//third_party/rust/small_ctor/v0_1:lib",
     ]
   }
 
@@ -52,7 +62,7 @@ if (enable_rust) {
     deps = [
       "//third_party/rust/proc_macro2/v1:lib",
       "//third_party/rust/quote/v1:lib",
-      "//third_party/rust/syn/v1:lib",
+      "//third_party/rust/syn/v2:lib",
     ]
 
     # This target's contents are exposed as part of :rust_gtest_interop.
@@ -67,6 +77,7 @@ if (enable_rust) {
     deps = [
       "//base",
       "//base/test:test_support",
+      "//build:blink_buildflags",
       "//testing/gtest",
     ]
   }

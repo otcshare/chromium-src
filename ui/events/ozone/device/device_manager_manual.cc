@@ -4,9 +4,9 @@
 
 #include "ui/events/ozone/device/device_manager_manual.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/files/file_enumerator.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/observer_list.h"
@@ -99,9 +99,7 @@ void DeviceManagerManual::OnDevicesScanned(
       continue;
 
     DeviceEvent event(DeviceEvent::INPUT, DeviceEvent::ADD, path);
-    for (DeviceEventObserver& observer : observers_) {
-      observer.OnDeviceEvent(event);
-    }
+    observers_.Notify(&DeviceEventObserver::OnDeviceEvent, event);
   }
 
   // Report removed devices.
@@ -110,9 +108,7 @@ void DeviceManagerManual::OnDevicesScanned(
       continue;
 
     DeviceEvent event(DeviceEvent::INPUT, DeviceEvent::REMOVE, path);
-    for (DeviceEventObserver& observer : observers_) {
-      observer.OnDeviceEvent(event);
-    }
+    observers_.Notify(&DeviceEventObserver::OnDeviceEvent, event);
   }
 
   devices_.swap(new_devices);

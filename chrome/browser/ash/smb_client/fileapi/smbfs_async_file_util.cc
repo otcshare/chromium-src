@@ -6,9 +6,10 @@
 
 #include <utility>
 
-#include "base/bind.h"
 #include "base/check_op.h"
 #include "base/files/file.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/smb_client/smb_service.h"
 #include "chrome/browser/ash/smb_client/smb_service_factory.h"
@@ -18,8 +19,7 @@
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/file_system/local_file_util.h"
 
-namespace ash {
-namespace smb_client {
+namespace ash::smb_client {
 namespace {
 
 void AllowCredentialsRequestOnUIThread(Profile* profile,
@@ -91,7 +91,7 @@ class DeleteRecursivelyOperation {
                                   base::BindOnce(std::move(callback_), error));
   }
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
   const base::FilePath path_;
   storage::AsyncFileUtil::StatusCallback callback_;
   scoped_refptr<base::SequencedTaskRunner> origin_task_runner_;
@@ -141,5 +141,4 @@ void SmbFsAsyncFileUtil::DeleteRecursively(
                          base::SequencedTaskRunner::GetCurrentDefault()))));
 }
 
-}  // namespace smb_client
-}  // namespace ash
+}  // namespace ash::smb_client

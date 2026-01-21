@@ -7,27 +7,31 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "components/search_engines/search_engine_type.h"
+#include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_id.h"
-#include "third_party/metrics_proto/chrome_searchbox_stats.pb.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
 #include "third_party/metrics_proto/omnibox_input_type.pb.h"
+#include "third_party/omnibox_proto/aim_tools.pb.h"
+#include "third_party/omnibox_proto/chrome_searchbox_stats.pb.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/third_party/mozilla/url_parse.h"
 
-class SearchTermsData;
 class TemplateURL;
-
 
 // TemplateURLRef -------------------------------------------------------------
 
@@ -57,10 +61,13 @@ class TemplateURLRef {
     SEARCH,
     SUGGEST,
     IMAGE,
+    IMAGE_TRANSLATE,
     NEW_TAB,
     CONTEXTUAL_SEARCH,
     INDEXED
   };
+
+  using RequestSource = SearchTermsData::RequestSource;
 
   // Type to store <content_type, post_data> pair for POST URLs.
   // The |content_type|(first part of the pair) is the content-type of
@@ -68,14 +75,6 @@ class TemplateURLRef {
   // "multipart/form-data" format, it also contains the MIME boundary used in
   // the |post_data|. See http://tools.ietf.org/html/rfc2046 for the details.
   typedef std::pair<std::string, std::string> PostContent;
-
-  // Enumeration of the known search or suggest request sources. These values
-  // are not persisted or used in histograms; thus can be freely changed.
-  enum RequestSource {
-    SEARCHBOX,          // Omnibox or the NTP realbox. The default.
-    CROS_APP_LIST,      // Chrome OS app list search box.
-    NON_SEARCHBOX_NTP,  // Suggestions for the NTP surface.
-  };
 
   // This struct encapsulates arguments passed to
   // TemplateURLRef::ReplaceSearchTerms methods.  By default, only search_terms
@@ -121,6 +120,13 @@ class TemplateURLRef {
       // indicates experiment status and server processing results so that
       // can be logged in GWS Sawmill logs for offline analysis for the
       // Related Searches MVP experiment.
+      // The |apply_lang_hint| specifies whether or not the |source_lang| should
+      // be used as a hint for backend language detection. Otherwise, backend
+      // translation is forced using |source_lang|. Note that this only supports
+      // Partial Translate and so may only be enabled for select clients on the
+      // server.
+      // The |use_snippet_as_subtitle| specifies whether or not the entity
+      // snippet should be used as the subtitle of the card.
       ContextualSearchParams(int version,
                              int contextual_cards_version,
                              std::string home_country,
@@ -130,7 +136,9 @@ class TemplateURLRef {
                              std::string source_lang,
                              std::string target_lang,
                              std::string fluent_languages,
-                             std::string related_searches_stamp);
+                             std::string related_searches_stamp,
+                             bool apply_lang_hint,
+                             bool use_snippet_as_subtitle);
       ContextualSearchParams(const ContextualSearchParams& other);
       ~ContextualSearchParams();
 
@@ -176,6 +184,12 @@ class TemplateURLRef {
       // experiment. The value is an arbitrary string that starts with a
       // schema version number.
       std::string related_searches_stamp;
+
+      // Whether hinted language detection should be used on the backend.
+      bool apply_lang_hint = false;
+
+      // Whether the snippet should be used as the subtitle.
+      bool use_snippet_as_subtitle = false;
     };
 
     // Estimates dynamic memory usage.
@@ -195,21 +209,13 @@ class TemplateURLRef {
     metrics::OmniboxFocusType focus_type =
         metrics::OmniboxFocusType::INTERACTION_DEFAULT;
 
-    // The optional assisted query stats, aka AQS, used for logging purposes.
-    // This string contains impressions of all autocomplete matches shown
-    // at the query submission time.  For privacy reasons, we require the
-    // search provider to support HTTPS protocol in order to receive the AQS
-    // param.
-    // For more details, see go/chrome-suggest-logging.
-    std::string assisted_query_stats;
-
     // The optional searchbox stats, reported as gs_lcrp for logging purposes.
     // This proto message contains information such as impressions of all
     // autocomplete matches shown at the query submission time.
     // For privacy reasons, we require the search provider to support HTTPS
     // protocol in order to receive the gs_lcrp param.
     // For more details, see go/chrome-suggest-logging-improvement.
-    metrics::ChromeSearchboxStats searchbox_stats;
+    omnibox::metrics::ChromeSearchboxStats searchbox_stats;
 
     // TODO: Remove along with "aq" CGI param.
     int accepted_suggestion = NO_SUGGESTIONS_AVAILABLE;
@@ -218,9 +224,16 @@ class TemplateURLRef {
     // the request was issued.  Set to std::u16string::npos if not used.
     size_t cursor_position = std::u16string::npos;
 
-    // The URL of the current webpage to be used for experimental zero-prefix
-    // suggestions.
+    // The URL of the current webpage.
     std::string current_page_url;
+
+    // The lens overlay suggest inputs to be sent in query parameters in
+    // the suggest requests.
+    std::optional<lens::proto::LensOverlaySuggestInputs>
+        lens_overlay_suggest_inputs;
+
+    // The tool mode to be sent in query parameters in the suggest requests.
+    omnibox::ToolMode aim_tool_mode = omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
 
     // Which omnibox the user used to type the prefix.
     metrics::OmniboxEventProto::PageClassification page_classification =
@@ -249,6 +262,12 @@ class TemplateURLRef {
     // search-by-image frontend.
     std::string image_thumbnail_content;
 
+    // The content type string for `image_thumbnail_content`.
+    std::string image_thumbnail_content_type;
+
+    // The image dimension data for a Google search-by-image query.
+    std::string processed_image_dimensions;
+
     // When searching for an image, the URL of the original image. Callers
     // should leave this empty for images specified via data: URLs.
     GURL image_url;
@@ -257,11 +276,12 @@ class TemplateURLRef {
     gfx::Size image_original_size;
 
     // Source of the search or suggest request.
-    RequestSource request_source = SEARCHBOX;
+    RequestSource request_source = RequestSource::SEARCHBOX;
 
-    // Whether the query is being fetched as a prefetch request before the user
-    // actually searches for the search terms.
-    bool is_prefetch = false;
+    // When the query is being fetched as a prefetch request, this is the value
+    // corresponding to the GOOGLE_PREFETCH_SOURCE ("pf") query param. Prefetch
+    // query params are not added if this is an empty string.
+    std::string prefetch_param;
 
     ContextualSearchParams contextual_search_params;
 
@@ -272,6 +292,12 @@ class TemplateURLRef {
     // Whether the request should bypass the HTTP cache, i.e., a "shift-reload".
     // If true, the net::LOAD_BYPASS_CACHE load flag will be set on the request.
     bool bypass_cache = false;
+
+    // The source locale used for image translations.
+    std::string image_translate_source_locale;
+
+    // The target locale used for image translations.
+    std::string image_translate_target_locale;
   };
 
   TemplateURLRef(const TemplateURL* owner, Type type);
@@ -296,20 +322,32 @@ class TemplateURLRef {
   //
   // If this TemplateURLRef does not support replacement (SupportsReplacement
   // returns false), an empty string is returned.
-  // If this TemplateURLRef uses POST, and |post_content| is not NULL, the
-  // |post_params_| will be replaced, encoded in "multipart/form-data" format
-  // and stored into |post_content|.
+  // If this TemplateURLRef uses POST, and `post_content` is not NULL, the
+  // `post_params_` will be replaced, encoded in "multipart/form-data" format
+  // and stored into `post_content`.
+  //
+  // If `url_override` is set to a valid url, that url will be used and the url
+  // in the TemplateURL will be disregarded.  This is currently used to allow
+  // setting the URL of the @gemini scope for pre-prod testing without modifying
+  // any in-memory or database entries.
+  // TODO(crbug.com/41494524): Remove the `url_override` when the
+  //  `StarterPackExpansion` feature launches/gets cleaned up.
   std::string ReplaceSearchTerms(const SearchTermsArgs& search_terms_args,
                                  const SearchTermsData& search_terms_data,
-                                 PostContent* post_content) const;
+                                 PostContent* post_content,
+                                 std::string url_override = "") const;
 
   // TODO(jnd): remove the following ReplaceSearchTerms definition which does
-  // not have |post_content| parameter once all reference callers pass
-  // |post_content| parameter.
-  std::string ReplaceSearchTerms(
-      const SearchTermsArgs& search_terms_args,
-      const SearchTermsData& search_terms_data) const {
-    return ReplaceSearchTerms(search_terms_args, search_terms_data, NULL);
+  // not have `post_content` parameter once all reference callers pass
+  // `post_content` parameter.
+  //
+  // TODO(crbug.com/41494524): Remove the `url_override` when the
+  //  `StarterPackExpansion` feature launches/gets cleaned up.
+  std::string ReplaceSearchTerms(const SearchTermsArgs& search_terms_args,
+                                 const SearchTermsData& search_terms_data,
+                                 std::string url_override = "") const {
+    return ReplaceSearchTerms(search_terms_args, search_terms_data, nullptr,
+                              url_override);
   }
 
   // Returns true if the TemplateURLRef is valid. An invalid TemplateURLRef is
@@ -354,7 +392,7 @@ class TemplateURLRef {
       const SearchTermsData& search_terms_data) const;
 
   // Converts the specified term in our owner's encoding to a std::u16string.
-  std::u16string SearchTermToString16(const base::StringPiece& term) const;
+  std::u16string SearchTermToString16(std::string_view term) const;
 
   // Returns true if this TemplateURLRef has a replacement term of
   // {google:baseURL} or {google:baseSuggestURL}.
@@ -385,6 +423,8 @@ class TemplateURLRef {
  private:
   friend class TemplateURL;
   friend class TemplateURLTest;
+  FRIEND_TEST_ALL_PREFIXES(TemplateURLTest,
+                           ImageThumbnailContentTypePostParams);
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, SetPrepopulatedAndParse);
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, ParseParameterKnown);
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, ParseParameterUnknown);
@@ -393,6 +433,7 @@ class TemplateURLRef {
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, ParseURLNoKnownParameters);
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, ParseURLTwoParameters);
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, ParseURLNestedParameter);
+  FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, ParsePlayStoreDefinitions);
   FRIEND_TEST_ALL_PREFIXES(TemplateURLTest, URLRefTestImageURLWithPOST);
 
   // Enumeration of the known types.
@@ -414,16 +455,18 @@ class TemplateURLRef {
     GOOGLE_IMAGE_THUMBNAIL,
     GOOGLE_IMAGE_URL,
     GOOGLE_INPUT_TYPE,
-    GOOGLE_IOS_SEARCH_LANGUAGE,
+    GOOGLE_LANGUAGE,
     GOOGLE_NTP_IS_THEMED,
     GOOGLE_OMNIBOX_FOCUS_TYPE,
     GOOGLE_ORIGINAL_QUERY_FOR_SUGGESTION,
     GOOGLE_PAGE_CLASSIFICATION,
     GOOGLE_PREFETCH_QUERY,
     GOOGLE_PREFETCH_SOURCE,
+    GOOGLE_PROCESSED_IMAGE_DIMENSIONS,
     GOOGLE_RLZ,
     GOOGLE_SEARCH_CLIENT,
     GOOGLE_SEARCH_FIELDTRIAL_GROUP,
+    GOOGLE_SEARCH_SOURCE_ID,
     GOOGLE_SEARCH_VERSION,
     GOOGLE_SESSION_TOKEN,
     GOOGLE_SUGGEST_CLIENT,
@@ -433,6 +476,8 @@ class TemplateURLRef {
     MAIL_RU_REFERRAL_ID,
     SEARCH_TERMS,
     YANDEX_REFERRAL_ID,
+    IMAGE_TRANSLATE_SOURCE_LOCALE,
+    IMAGE_TRANSLATE_TARGET_LOCALE
   };
 
   // Used to identify an element of the raw url that can be replaced.
@@ -496,7 +541,11 @@ class TemplateURLRef {
   // If the url has not yet been parsed, ParseURL is invoked.
   // NOTE: While this is const, it modifies parsed_, valid_, parsed_url_ and
   // search_offset_.
-  void ParseIfNecessary(const SearchTermsData& search_terms_data) const;
+  //
+  // TODO(crbug.com/41494524): Remove the `url_override` when the
+  //  `StarterPackExpansion` feature launches/gets cleaned up.
+  void ParseIfNecessary(const SearchTermsData& search_terms_data,
+                        std::string url_override = "") const;
 
   // Parses a wildcard out of |path|, putting the parsed path in |path_prefix_|
   // and |path_suffix_| and setting |path_wildcard_present_| to true.
@@ -533,10 +582,9 @@ class TemplateURLRef {
   // Replaces all replacements in |parsed_url_| with their actual values and
   // returns the result.  This is the main functionality of
   // ReplaceSearchTerms().
-  std::string HandleReplacements(
-      const SearchTermsArgs& search_terms_args,
-      const SearchTermsData& search_terms_data,
-      PostContent* post_content) const;
+  std::string HandleReplacements(const SearchTermsArgs& search_terms_args,
+                                 const SearchTermsData& search_terms_data,
+                                 PostContent* post_content) const;
 
   // The TemplateURL that contains us.  This should outlive us.
   raw_ptr<const TemplateURL> owner_;
@@ -586,12 +634,21 @@ class TemplateURLRef {
   bool prepopulated_ = false;
 };
 
-
 // TemplateURL ----------------------------------------------------------------
 
-// A TemplateURL represents a single "search engine", defined primarily as a
-// subset of the Open Search Description Document
-// (http://www.opensearch.org/Specifications/OpenSearch) plus some extensions.
+// A TemplateURL represents a single "search engine". It can hold two sets of
+// data: a "local" value and an "account" value. The local value is stored on
+// the device and is not synced. The account value is synced.
+//
+// When a user is signed in, a TemplateURL can have both local and account
+// values. The `data()` method provides a merged view of these two values, with
+// the more recent one taking precedence. When a search engine is modified, the
+// change is written to both the local and account values (dual-write). This
+// ensures that the change is both synced to the user's account and persists on
+// the device after sign-out.
+//
+// Upon sign-out, the account values are cleared, leaving only the local values.
+//
 // One TemplateURL contains several TemplateURLRefs, which correspond to various
 // different capabilities (e.g. doing searches or getting suggestions), as well
 // as a TemplateURLData containing other details like the name, keyword, etc.
@@ -601,7 +658,8 @@ class TemplateURLRef {
 // is made a friend so that it can be the exception to this pattern.
 class TemplateURL {
  public:
-  using TemplateURLVector = std::vector<TemplateURL*>;
+  using TemplateURLVector =
+      std::vector<raw_ptr<TemplateURL, VectorExperimental>>;
   using OwnedTemplateURLVector = std::vector<std::unique_ptr<TemplateURL>>;
 
   // These values are not persisted and can be freely changed.
@@ -643,6 +701,9 @@ class TemplateURL {
   };
 
   explicit TemplateURL(const TemplateURLData& data, Type type = NORMAL);
+  TemplateURL(const std::optional<TemplateURLData>& local_data,
+              const std::optional<TemplateURLData>& account_data,
+              Type type = NORMAL);
 
   // Constructor for extension controlled engine. |type| must be
   // NORMAL_CONTROLLED_BY_EXTENSION or OMNIBOX_API_EXTENSION.
@@ -654,11 +715,12 @@ class TemplateURL {
 
   TemplateURL(const TemplateURL&) = delete;
   TemplateURL& operator=(const TemplateURL&) = delete;
+  TemplateURL(TemplateURL&& other);
 
   ~TemplateURL();
 
-  // For two engines with the same keyword, |this| and |other|,
-  // returns true if |this| is strictly better than |other|.
+  // For two engines, |this| and |other|, returns true if |this| is strictly
+  // better than |other|.
   //
   // While normal engines must all have distinct keywords, policy-created,
   // extension-controlled and omnibox API engines may have the same keywords as
@@ -674,7 +736,7 @@ class TemplateURL {
   // today, because the sync GUIDs are not actually globally unique, so there
   // can be a genuine tie, which is not good, because then two different clients
   // could choose to resolve the conflict in two different ways.
-  bool IsBetterThanEngineWithConflictingKeyword(const TemplateURL* other) const;
+  bool IsBetterThanConflictingEngine(const TemplateURL* other) const;
 
   // Generates a suitable keyword for the specified url, which must be valid.
   // This is guaranteed not to return an empty string, since TemplateURLs should
@@ -690,80 +752,99 @@ class TemplateURL {
                           const TemplateURLData* data,
                           const SearchTermsData& search_terms_data);
 
-  const TemplateURLData& data() const { return data_; }
+  const TemplateURLData& data() const;
 
-  const std::u16string& short_name() const { return data_.short_name(); }
+  const std::u16string& short_name() const { return data().short_name(); }
+  void set_short_name(const std::u16string& short_name);
   // An accessor for the short_name, but adjusted so it can be appropriately
   // displayed even if it is LTR and the UI is RTL.
   std::u16string AdjustedShortNameForLocaleDirection() const;
 
-  const std::u16string& keyword() const { return data_.keyword(); }
+  const std::u16string& keyword() const { return data().keyword(); }
+  void set_keyword(const std::u16string& keyword);
 
-  const std::string& url() const { return data_.url(); }
-  const std::string& suggestions_url() const { return data_.suggestions_url; }
-  const std::string& image_url() const { return data_.image_url; }
-  const std::string& new_tab_url() const { return data_.new_tab_url; }
+  const std::string& url() const { return data().url(); }
+  const std::string& suggestions_url() const { return data().suggestions_url; }
+  const std::string& image_url() const { return data().image_url; }
+  const std::string& image_translate_url() const {
+    return data().image_translate_url;
+  }
+  const std::string& new_tab_url() const { return data().new_tab_url; }
   const std::string& contextual_search_url() const {
-    return data_.contextual_search_url;
+    return data().contextual_search_url;
   }
   const std::string& search_url_post_params() const {
-    return data_.search_url_post_params;
+    return data().search_url_post_params;
   }
   const std::string& suggestions_url_post_params() const {
-    return data_.suggestions_url_post_params;
+    return data().suggestions_url_post_params;
   }
   const std::string& image_url_post_params() const {
-    return data_.image_url_post_params;
+    return data().image_url_post_params;
   }
-  const std::string& side_search_param() const {
-    return data_.side_search_param;
+  const std::string& image_translate_source_language_param_key() const {
+    return data().image_translate_source_language_param_key;
   }
-  const std::string& side_image_search_param() const {
-    return data_.side_image_search_param;
+  const std::string& image_translate_target_language_param_key() const {
+    return data().image_translate_target_language_param_key;
   }
   const std::u16string& image_search_branding_label() const {
-    return !data_.image_search_branding_label.empty()
-               ? data_.image_search_branding_label
+    return !data().image_search_branding_label.empty()
+               ? data().image_search_branding_label
                : short_name();
   }
   const std::vector<std::string>& search_intent_params() const {
-    return data_.search_intent_params;
+    return data().search_intent_params;
   }
   const std::vector<std::string>& alternate_urls() const {
-    return data_.alternate_urls;
+    return data().alternate_urls;
   }
-  const GURL& favicon_url() const { return data_.favicon_url; }
+  const GURL& favicon_url() const { return data().favicon_url; }
 
-  const GURL& logo_url() const { return data_.logo_url; }
+  const GURL& logo_url() const { return data().logo_url; }
 
-  const GURL& doodle_url() const { return data_.doodle_url; }
+  const GURL& doodle_url() const { return data().doodle_url; }
 
-  const GURL& originating_url() const { return data_.originating_url; }
+  const GURL& originating_url() const { return data().originating_url; }
 
-  bool safe_for_autoreplace() const { return data_.safe_for_autoreplace; }
+  bool safe_for_autoreplace() const { return data().safe_for_autoreplace; }
+  void set_safe_for_autoreplace(bool safe_for_autoreplace);
 
   const std::vector<std::string>& input_encodings() const {
-    return data_.input_encodings;
+    return data().input_encodings;
   }
 
-  TemplateURLID id() const { return data_.id; }
+  TemplateURLID id() const { return data().id; }
+  void set_id(TemplateURLID id);
 
-  base::Time date_created() const { return data_.date_created; }
-  base::Time last_modified() const { return data_.last_modified; }
-  base::Time last_visited() const { return data_.last_visited; }
+  base::Time date_created() const { return data().date_created; }
+  base::Time last_modified() const { return data().last_modified; }
+  base::Time last_visited() const { return data().last_visited; }
 
-  bool created_by_policy() const { return data_.created_by_policy; }
-  bool created_from_play_api() const { return data_.created_from_play_api; }
+  TemplateURLData::PolicyOrigin policy_origin() const {
+    return data().policy_origin;
+  }
+  bool enforced_by_policy() const { return data().enforced_by_policy; }
+  bool featured_by_policy() const { return data().featured_by_policy; }
 
-  int usage_count() const { return data_.usage_count; }
+  int usage_count() const { return data().usage_count; }
+  void IncrementUsageCount();
 
-  int prepopulate_id() const { return data_.prepopulate_id; }
+  int prepopulate_id() const { return data().prepopulate_id; }
 
-  const std::string& sync_guid() const { return data_.sync_guid; }
+  const std::string& sync_guid() const { return data().sync_guid; }
+  void GenerateSyncGUID();
 
-  TemplateURLData::ActiveStatus is_active() const { return data_.is_active; }
+  TemplateURLData::ActiveStatus is_active() const { return data().is_active; }
+  void set_is_active(TemplateURLData::ActiveStatus active_status);
 
-  int starter_pack_id() const { return data_.starter_pack_id; }
+  int starter_pack_id() const { return data().starter_pack_id; }
+  // Some starter packs are considered 'ask a question' kind of starter packs.
+  // This can be used to condition UI text or a11y strings.
+  bool is_ask_starter_pack() const {
+    return starter_pack_id() == template_url_starter_pack_data::kGemini ||
+           starter_pack_id() == template_url_starter_pack_data::kAiMode;
+  }
 
   const std::vector<TemplateURLRef>& url_refs() const { return url_refs_; }
   const TemplateURLRef& url_ref() const {
@@ -775,6 +856,9 @@ class TemplateURL {
     return suggestions_url_ref_;
   }
   const TemplateURLRef& image_url_ref() const { return image_url_ref_; }
+  const TemplateURLRef& image_translate_url_ref() const {
+    return image_translate_url_ref_;
+  }
   const TemplateURLRef& new_tab_url_ref() const { return new_tab_url_ref_; }
   const TemplateURLRef& contextual_search_url_ref() const {
     return contextual_search_url_ref_;
@@ -782,7 +866,7 @@ class TemplateURL {
 
   Type type() const { return type_; }
 
-  const AssociatedExtensionInfo* GetExtensionInfoForTesting() const {
+  const AssociatedExtensionInfo* GetExtensionInfo() const {
     return extension_info_.get();
   }
 
@@ -809,6 +893,20 @@ class TemplateURL {
   // OMNIBOX_API_EXTENSION.
   std::string GetExtensionId() const;
 
+  // Returns the resource ID for the logo (small / favicon style) associated
+  // with this template URL, or an empty string if none is associated with it.
+  std::string GetBuiltinImageResourceId() const;
+
+  // Returns the resource ID for the search engine description string associated
+  // with this template URL, or an empty string if none is associated with it.
+  std::string GetBuiltinDescriptionResourceId() const;
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Returns the marketing snippet string for the search engine, either the
+  // built-in one or a fallback variant.
+  std::u16string GetMarketingSnippet() const;
+#endif
+
   // Returns the type of this search engine, or SEARCH_ENGINE_OTHER if no
   // engines match.
   SearchEngineType GetEngineType(
@@ -832,14 +930,19 @@ class TemplateURL {
   bool IsSearchURL(const GURL& url,
                    const SearchTermsData& search_terms_data) const;
 
-  // Given a |url| corresponding to this TemplateURL, keeps the search terms and
-  // optionally the search intent params and removes the other params. If |url|
-  // is not a search URL or replacement fails, leaves |result| untouched and
-  // returns false. Used to compare normalized (aka canonical) search URLs.
+  // Given a `url` corresponding to this TemplateURL, keeps the search terms and
+  // optionally the search intent params and removes the other params. If
+  // `normalize_search_terms` is true, the search terms in the final URL
+  // will be converted to lowercase with extra whitespace characters collapsed.
+  // If `url` is not a search URL or replacement fails, leaves `out_url` and
+  // `out_search_terms` untouched and returns false. Used to compare
+  // normalized (aka canonical) search URLs.
   bool KeepSearchTermsInURL(const GURL& url,
                             const SearchTermsData& search_terms_data,
                             const bool keep_search_intent_params,
-                            GURL* result) const;
+                            const bool normalize_search_terms,
+                            GURL* out_url,
+                            std::u16string* out_search_terms = nullptr) const;
 
   // Given a |url| corresponding to this TemplateURL, identifies the search
   // terms and replaces them with the ones in |search_terms_args|, leaving the
@@ -877,31 +980,6 @@ class TemplateURL {
   // Returns an empty GURL if this template URL has no suggestions_url().
   GURL GenerateSuggestionURL(const SearchTermsData& search_terms_data) const;
 
-  // Returns true if this search engine supports the side search feature.
-  bool IsSideSearchSupported() const;
-
-  // Returns true if this search engine supports the side image search feature.
-  bool IsSideImageSearchSupported() const;
-
-  // Takes a search URL belonging to this search engine and generates the URL
-  // appropriate for the side search side panel.
-  GURL GenerateSideSearchURL(const GURL& search_url,
-                             const std::string& version,
-                             const SearchTermsData& search_terms_data) const;
-
-  // Takes a search URL that belongs to this side search in the side panel and
-  // removes the side search param from the URL.
-  GURL RemoveSideSearchParamFromURL(const GURL& side_search_url) const;
-
-  // Takes a search URL belonging to this image search engine and generates the
-  // URL appropriate for the image search in the side panel.
-  GURL GenerateSideImageSearchURL(const GURL& image_search_url,
-                                  const std::string& version) const;
-
-  // Takes a search URL that belongs to this image search in the side panel and
-  // removes the side image search param from the URL.
-  GURL RemoveSideImageSearchParamFromURL(const GURL& image_search_url) const;
-
   // TemplateURL internally caches values derived from a passed SearchTermsData
   // to make its functions quick. This method invalidates any cached values and
   // it should be called after SearchTermsData has been changed.
@@ -911,16 +989,28 @@ class TemplateURL {
   // See base/trace_event/memory_usage_estimator.h for more info.
   size_t EstimateMemoryUsage() const;
 
-  // Returns whether |url| query contains a side search param.
-  bool ContainsSideSearchParam(const GURL& url) const;
+  // Returns the RegulatoryExtensionType appropriate for this instance of the
+  // TemplateURL.
+  RegulatoryExtensionType GetRegulatoryExtensionType() const;
 
-  // Returns whether |url| query contains a side image search param.
-  bool ContainsSideImageSearchParam(const GURL& url) const;
+  // Returns the specific data associated with the supplied
+  // RegulatoryExtensionType.
+  const TemplateURLData::RegulatoryExtension* GetRegulatoryExtension(
+      RegulatoryExtensionType type) const;
 
- private:
-  friend class TemplateURLService;
-
-  void CopyFrom(const TemplateURL& other);
+  // Returns whether this search engine was created by an Enterprise policy.
+  bool CreatedByPolicy() const;
+  // Returns whether this search engine was created by the Default Search
+  // Provider Enterprise policy.
+  bool CreatedByDefaultSearchProviderPolicy() const;
+  // Returns whether this search engine was created by an Enterprise policy that
+  // doesn't define the Default Search Provider.
+  bool CreatedByNonDefaultSearchProviderPolicy() const;
+  // Returns whether this search engine was created by the
+  // EnterpriseSearchAggregatorSettings policy.
+  bool CreatedByEnterpriseSearchAggregatorPolicy() const;
+  // Returns whether this search engine was created by a regulatory program.
+  bool CreatedByRegulatoryProgram() const;
 
   void SetURL(const std::string& url);
   void SetPrepopulateId(int id);
@@ -932,6 +1022,19 @@ class TemplateURL {
   void ResetKeywordIfNecessary(const SearchTermsData& search_terms_data,
                                bool force);
 
+  void CopyFrom(const TemplateURL& other);
+
+  const std::optional<TemplateURLData>& GetLocalData() const;
+  const std::optional<TemplateURLData>& GetAccountData() const;
+
+  void CopyActiveValueToLocalAndAccount();
+
+  // Returns whether this search engine can be overridden and added to the
+  // overridden keyword pref list. Should be used for engines that are created
+  // by an Enterprise policy that doesn't define the Default Search Provider.
+  bool CanPolicyBeOverridden() const;
+
+ private:
   // Resizes the |url_refs_| vector, which always holds the search URL as the
   // last item.
   void ResizeURLRefVector();
@@ -946,7 +1049,19 @@ class TemplateURL {
                             url::Parsed::ComponentType* search_terms_component,
                             url::Component* search_terms_position) const;
 
-  TemplateURLData data_;
+  // Returns the resource ID base associated with this template URL, if it is
+  // provided from built-in data.
+  std::optional<std::string_view> GetBaseBuiltinResourceId() const;
+
+  // Returns the built-in marketing snippet string for the search engine, or
+  // `std::nullopt` if a marketing snippets are not included in this build of
+  // unavailable for this search engine.
+  std::optional<std::u16string> GetBuiltinMarketingSnippet() const;
+
+  TemplateURLData& active_data();
+
+  std::optional<TemplateURLData> local_data_;
+  std::optional<TemplateURLData> account_data_;
 
   // Contains TemplateURLRefs corresponding to the alternate URLs and the search
   // URL, in priority order: the URL at index 0 is treated as the highest
@@ -960,6 +1075,7 @@ class TemplateURL {
 
   TemplateURLRef suggestions_url_ref_;
   TemplateURLRef image_url_ref_;
+  TemplateURLRef image_translate_url_ref_;
   TemplateURLRef new_tab_url_ref_;
   TemplateURLRef contextual_search_url_ref_;
   std::unique_ptr<AssociatedExtensionInfo> extension_info_;
@@ -968,6 +1084,13 @@ class TemplateURL {
 
   // Caches the computed engine type across successive calls to GetEngineType().
   mutable SearchEngineType engine_type_;
+
+  // Caches the computed base resource ID across successive calls to
+  // `GetBaseBuiltinResourceId()`.
+  // The actual string lives in built-in
+  // `TemplateURLPrepopulateData::PrepopulatedEngine` entries.
+  mutable std::optional<std::optional<std::string_view>>
+      base_builtin_resource_id_;
 
   // TODO(sky): Add date last parsed OSD file.
 };

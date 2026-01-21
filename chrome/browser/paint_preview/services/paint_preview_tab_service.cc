@@ -7,9 +7,7 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/callback.h"
-#include "base/memory/memory_pressure_listener.h"
-#include "base/memory/memory_pressure_monitor.h"
+#include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -18,6 +16,8 @@
 #include "chrome/browser/paint_preview/services/paint_preview_tab_service_file_mixin.h"
 #include "components/paint_preview/browser/file_manager.h"
 #include "components/paint_preview/browser/warm_compositor.h"
+#include "components/paint_preview/common/mojom/paint_preview_recorder.mojom.h"
+#include "components/paint_preview/common/mojom/paint_preview_types.mojom.h"
 #include "content/public/browser/render_process_host.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/gfx/geometry/rect.h"
@@ -36,7 +36,7 @@ namespace paint_preview {
 namespace {
 
 // The maximum X and Y dimension in pixels.
-// TODO(crbug/1239291): Tune this value.
+// TODO(crbug.com/40193795): Tune this value.
 constexpr int kMaxCaptureSizePixels = 100000;
 
 constexpr size_t kMaxPerCaptureSizeBytes = 8 * 1000L * 1000L;       // 8 MB.
@@ -63,7 +63,7 @@ int TabIdFromDirectoryKey(const DirectoryKey& key) {
 PaintPreviewTabService::TabServiceTask::TabServiceTask(
     int tab_id,
     const DirectoryKey& key,
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     content::GlobalRenderFrameHostId frame_routing_id,
     float page_scale_factor,
     int scroll_offset_x,
@@ -87,7 +87,10 @@ PaintPreviewTabService::PaintPreviewTabService(
     : PaintPreviewBaseService(std::move(file_mixin),
                               std::move(policy),
                               is_off_the_record),
-      cache_ready_(false) {
+      cache_ready_(false),
+      memory_pressure_listener_registration_(
+          base::MemoryPressureListenerTag::kPaintPreviewTabService,
+          this) {
   GetFileMixin()->GetTaskRunner()->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&FileManager::ListUsedKeys,
@@ -130,18 +133,16 @@ void PaintPreviewTabService::CaptureTab(int tab_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If the system is under memory pressure don't try to capture.
-  auto* memory_monitor = base::MemoryPressureMonitor::Get();
-  if (memory_monitor &&
-      memory_monitor->GetCurrentPressureLevel() >=
-          base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE)
+  if (memory_pressure_level() >= base::MEMORY_PRESSURE_LEVEL_MODERATE) {
     return;
+  }
 
   // Mark |contents| as being captured so that the renderer doesn't go away
   // until the capture is finished. This is done even before a file is created
   // to ensure the renderer doesn't go away while that happens.
-  auto capture_handle =
-      contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
-                                       /*stay_awake=*/true);
+  auto capture_handle = contents->IncrementCapturerCount(
+      gfx::Size(), /*stay_hidden=*/true,
+      /*stay_awake=*/true, /*is_activity=*/true);
 
   auto file_manager = GetFileMixin()->GetFileManager();
 
@@ -218,17 +219,16 @@ void PaintPreviewTabService::AuditArtifacts(
 #if BUILDFLAG(IS_ANDROID)
 void PaintPreviewTabService::CaptureTabAndroid(
     JNIEnv* env,
-    jint j_tab_id,
-    const base::android::JavaParamRef<jobject>& j_web_contents,
-    jboolean j_accessibility_enabled,
+    int32_t j_tab_id,
+    const base::android::JavaRef<jobject>& j_web_contents,
+    bool j_accessibility_enabled,
     jfloat j_page_scale_factor,
-    jint j_x,
-    jint j_y,
-    const base::android::JavaParamRef<jobject>& j_callback) {
+    int32_t j_x,
+    int32_t j_y,
+    const base::android::JavaRef<jobject>& j_callback) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(j_web_contents);
-  CaptureTab(static_cast<int>(j_tab_id), web_contents,
-             static_cast<bool>(j_accessibility_enabled),
+  CaptureTab(static_cast<int>(j_tab_id), web_contents, j_accessibility_enabled,
              static_cast<float>(j_page_scale_factor), static_cast<int>(j_x),
              static_cast<int>(j_y),
              base::BindOnce(
@@ -238,31 +238,29 @@ void PaintPreviewTabService::CaptureTabAndroid(
                      base::android::ScopedJavaGlobalRef<jobject>(j_callback))));
 }
 
-void PaintPreviewTabService::TabClosedAndroid(JNIEnv* env, jint j_tab_id) {
+void PaintPreviewTabService::TabClosedAndroid(JNIEnv* env, int32_t j_tab_id) {
   TabClosed(static_cast<int>(j_tab_id));
 }
 
-jboolean PaintPreviewTabService::HasCaptureForTabAndroid(JNIEnv* env,
-                                                         jint j_tab_id) {
-  return static_cast<jboolean>(HasCaptureForTab(static_cast<int>(j_tab_id)));
+bool PaintPreviewTabService::HasCaptureForTabAndroid(JNIEnv* env,
+                                                     int32_t j_tab_id) {
+  return static_cast<bool>(HasCaptureForTab(static_cast<int>(j_tab_id)));
 }
 
 void PaintPreviewTabService::AuditArtifactsAndroid(
     JNIEnv* env,
-    const base::android::JavaParamRef<jintArray>& j_tab_ids) {
+    const base::android::JavaRef<jintArray>& j_tab_ids) {
   std::vector<int> tab_ids;
   base::android::JavaIntArrayToIntVector(env, j_tab_ids, &tab_ids);
   AuditArtifacts(tab_ids);
 }
 
-jboolean PaintPreviewTabService::IsCacheInitializedAndroid(JNIEnv* env) {
-  return static_cast<jboolean>(CacheInitialized());
+bool PaintPreviewTabService::IsCacheInitializedAndroid(JNIEnv* env) {
+  return static_cast<bool>(CacheInitialized());
 }
 
-base::android::ScopedJavaLocalRef<jstring>
-PaintPreviewTabService::GetPathAndroid(JNIEnv* env) {
-  return base::android::ConvertUTF8ToJavaString(
-      env, GetFileMixin()->GetFileManager()->GetPath().AsUTF8Unsafe());
+std::string PaintPreviewTabService::GetPathAndroid(JNIEnv* env) {
+  return GetFileMixin()->GetFileManager()->GetPath().AsUTF8Unsafe();
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -281,7 +279,7 @@ void PaintPreviewTabService::InitializeCache(
 void PaintPreviewTabService::CaptureTabInternal(
     base::WeakPtr<TabServiceTask> task,
     bool accessibility_enabled,
-    const absl::optional<base::FilePath>& file_path) {
+    const std::optional<base::FilePath>& file_path) {
   if (!task) {
     return;
   }
@@ -308,9 +306,8 @@ void PaintPreviewTabService::CaptureTabInternal(
                        base::BindOnce(&PaintPreviewTabService::OnAXTreeWritten,
                                       weak_ptr_factory_.GetWeakPtr(), task)),
         ui::kAXModeWebContentsOnly,
-        /* exclude_offscreen= */ false,
         /* max_nodes= */ 5000,
-        /* timeout= */ {});
+        /* timeout= */ {}, content::WebContents::AXTreeSnapshotPolicy::kAll);
   }
 
   CaptureParams capture_params;
@@ -318,8 +315,14 @@ void PaintPreviewTabService::CaptureTabInternal(
   capture_params.render_frame_host = rfh;
   capture_params.root_dir = &file_path.value();
   capture_params.persistence = RecordingPersistence::kFileSystem;
+  // Note that the clip_rect's origin is ignored, due to
+  // `clip_x_coord_override` and `clip_y_coord_override`.
   capture_params.clip_rect =
-      gfx::Rect(-1, -1, kMaxCaptureSizePixels, kMaxCaptureSizePixels);
+      gfx::Rect(0, 0, kMaxCaptureSizePixels, kMaxCaptureSizePixels);
+  capture_params.clip_x_coord_override =
+      paint_preview::mojom::ClipCoordOverride::kCenterOnScrollOffset;
+  capture_params.clip_y_coord_override =
+      paint_preview::mojom::ClipCoordOverride::kCenterOnScrollOffset;
   capture_params.capture_links = true;
   capture_params.max_per_capture_size = kMaxPerCaptureSizeBytes;
   capture_params.max_decoded_image_size_bytes = kMaxDecodedImageSizeBytes;
@@ -414,3 +417,7 @@ void PaintPreviewTabService::RunAudit(
 }
 
 }  // namespace paint_preview
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(PaintPreviewTabService)
+#endif

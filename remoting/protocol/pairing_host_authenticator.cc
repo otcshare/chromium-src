@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "remoting/base/constants.h"
 #include "remoting/protocol/channel_authenticator.h"
@@ -49,19 +49,14 @@ void PairingHostAuthenticator::Initialize(
 PairingHostAuthenticator::~PairingHostAuthenticator() = default;
 
 Authenticator::State PairingHostAuthenticator::state() const {
-  if (protocol_error_) {
-    return REJECTED;
-  } else if (waiting_for_paired_secret_) {
+  if (waiting_for_paired_secret_) {
     return PROCESSING_MESSAGE;
   }
   return PairingAuthenticatorBase::state();
 }
 
-Authenticator::RejectionReason
-PairingHostAuthenticator::rejection_reason() const {
-  if (protocol_error_) {
-    return RejectionReason::PROTOCOL_ERROR;
-  }
+Authenticator::RejectionReason PairingHostAuthenticator::rejection_reason()
+    const {
   return PairingAuthenticatorBase::rejection_reason();
 }
 

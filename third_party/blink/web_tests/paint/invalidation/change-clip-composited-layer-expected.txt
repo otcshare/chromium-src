@@ -7,9 +7,8 @@
       "backgroundColor": "#FFFFFF"
     },
     {
-      "name": "LayoutNGBlockFlow DIV id='target'",
+      "name": "LayoutBlockFlow DIV id='target'",
       "bounds": [100, 10],
-      "contentsOpaqueForText": true,
       "drawsContent": false,
       "invalidations": [
         [0, 0, 50, 10]

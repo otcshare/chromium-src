@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
+#include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
@@ -93,34 +94,39 @@ void CSSSelectorWatch::UpdateSelectorMatches(
   bool should_update_timer = false;
 
   for (const auto& selector : removed_selectors) {
-    if (!matching_callback_selectors_.erase(selector))
+    if (!matching_callback_selectors_.erase(selector)) {
       continue;
+    }
 
     // Count reached 0.
     should_update_timer = true;
     auto it = added_selectors_.find(selector);
-    if (it != added_selectors_.end())
+    if (it != added_selectors_.end()) {
       added_selectors_.erase(it);
-    else
+    } else {
       removed_selectors_.insert(selector);
+    }
   }
 
   for (const auto& selector : added_selectors) {
     HashCountedSet<String>::AddResult result =
         matching_callback_selectors_.insert(selector);
-    if (!result.is_new_entry)
+    if (!result.is_new_entry) {
       continue;
+    }
 
     should_update_timer = true;
     auto it = removed_selectors_.find(selector);
-    if (it != removed_selectors_.end())
+    if (it != removed_selectors_.end()) {
       removed_selectors_.erase(it);
-    else
+    } else {
       added_selectors_.insert(selector);
+    }
   }
 
-  if (!should_update_timer)
+  if (!should_update_timer) {
     return;
+  }
 
   if (removed_selectors_.empty() && added_selectors_.empty()) {
     if (callback_selector_change_timer_.IsActive()) {
@@ -139,8 +145,9 @@ void CSSSelectorWatch::UpdateSelectorMatches(
 static bool AllCompound(const StyleRule* style_rule) {
   for (const CSSSelector* selector = style_rule->FirstSelector(); selector;
        selector = CSSSelectorList::Next(*selector)) {
-    if (!selector->IsCompound())
+    if (!selector->IsCompound()) {
       return false;
+    }
   }
   return true;
 }
@@ -149,7 +156,8 @@ void CSSSelectorWatch::WatchCSSSelectors(const Vector<String>& selectors) {
   watched_callback_selectors_.clear();
 
   CSSPropertyValueSet* callback_property_set =
-      ImmutableCSSPropertyValueSet::Create(nullptr, 0, kUASheetMode);
+      ImmutableCSSPropertyValueSet::Create(base::span<CSSPropertyValue>(),
+                                           kUASheetMode);
 
   // UA stylesheets always parse in the insecure context mode.
   auto* context = MakeGarbageCollected<CSSParserContext>(
@@ -157,16 +165,19 @@ void CSSSelectorWatch::WatchCSSSelectors(const Vector<String>& selectors) {
   HeapVector<CSSSelector> arena;
   for (const auto& selector : selectors) {
     base::span<CSSSelector> selector_vector = CSSParser::ParseSelector(
-        context, /*parent_rule_for_nesting=*/nullptr, nullptr, selector, arena);
-    if (selector_vector.empty())
+        context, CSSNestingType::kNone, /*parent_rule_for_nesting=*/nullptr,
+        nullptr, selector, arena);
+    if (selector_vector.empty()) {
       continue;
+    }
 
     StyleRule* style_rule =
         StyleRule::Create(selector_vector, callback_property_set);
 
     // Only accept Compound Selectors, since they're cheaper to match.
-    if (!AllCompound(style_rule))
+    if (!AllCompound(style_rule)) {
       continue;
+    }
 
     watched_callback_selectors_.push_back(style_rule);
   }

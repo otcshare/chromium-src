@@ -11,7 +11,9 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "third_party/icu/source/common/unicode/unistr.h"
 #include "third_party/icu/source/i18n/unicode/msgfmt.h"
@@ -20,7 +22,58 @@
 
 namespace ui {
 
-COMPONENT_EXPORT(UI_BASE) bool formatter_force_fallback = false;
+namespace {
+
+// Class to hold all Formatters, intended to be used in a global instance.
+class FormatterContainer {
+ public:
+  FormatterContainer() { Initialize(); }
+
+  FormatterContainer(const FormatterContainer&) = delete;
+  FormatterContainer& operator=(const FormatterContainer&) = delete;
+
+  ~FormatterContainer() = default;
+
+  const Formatter* Get(TimeFormat::Format format,
+                       TimeFormat::Length length) const {
+    return formatter_[format][length].get();
+  }
+
+  void ResetForTesting() {
+    Shutdown();
+    Initialize();
+  }
+
+ private:
+  void Initialize();
+  void Shutdown();
+
+  std::array<std::array<std::unique_ptr<Formatter>, TimeFormat::LENGTH_COUNT>,
+             TimeFormat::FORMAT_COUNT>
+      formatter_;
+};
+
+FormatterContainer& GetFormatterContainer() {
+  static base::NoDestructor<FormatterContainer> formatter_container;
+  return *formatter_container;
+}
+
+bool formatter_force_fallback = false;
+
+}  // namespace
+
+const Formatter* GetFormatter(TimeFormat::Format format,
+                              TimeFormat::Length length) {
+  return GetFormatterContainer().Get(format, length);
+}
+
+void ResetFormatterForTesting() {
+  GetFormatterContainer().ResetForTesting();  // IN-TEST
+}
+
+void SetFormatterForceFallbackForTesting(bool force_fallback) {
+  formatter_force_fallback = force_fallback;
+}
 
 struct Pluralities {
   int id;
@@ -60,6 +113,31 @@ static const Pluralities IDS_ELAPSED_MONTH = {
     IDS_TIME_ELAPSED_MONTHS, "one{# month ago}", " other{# months ago}"};
 static const Pluralities IDS_ELAPSED_YEAR = {
     IDS_TIME_ELAPSED_YEARS, "one{# year ago}", " other{# years ago}"};
+
+#if BUILDFLAG(IS_IOS)
+static const Pluralities IDS_TITLE_CASE_ELAPSED_LONG_SEC = {
+    IDS_TIME_TITLE_CASE_ELAPSED_LONG_SECS, "one{# Second Ago}",
+    " other{# Seconds Ago}"};
+
+static const Pluralities IDS_TITLE_CASE_ELAPSED_LONG_MIN = {
+    IDS_TIME_TITLE_CASE_ELAPSED_LONG_MINS, "one{# Minute Ago}",
+    " other{# Minutes Ago}"};
+
+static const Pluralities IDS_TITLE_CASE_ELAPSED_HOUR = {
+    IDS_TIME_TITLE_CASE_ELAPSED_HOURS, "one{# Hour Ago}",
+    " other{# Hours Ago}"};
+
+static const Pluralities IDS_TITLE_CASE_ELAPSED_DAY = {
+    IDS_TIME_TITLE_CASE_ELAPSED_DAYS, "one{# Day Ago}", " other{# Days Ago}"};
+
+static const Pluralities IDS_TITLE_CASE_ELAPSED_MONTH = {
+    IDS_TIME_TITLE_CASE_ELAPSED_MONTHS, "one{# Month Ago}",
+    " other{# Months Ago}"};
+
+static const Pluralities IDS_TITLE_CASE_ELAPSED_YEAR = {
+    IDS_TIME_TITLE_CASE_ELAPSED_YEARS, "one{# Year Ago}",
+    " other{# Years Ago}"};
+#endif
 
 static const Pluralities IDS_REMAINING_SHORT_SEC = {
   IDS_TIME_REMAINING_SECS,
@@ -231,14 +309,15 @@ Formatter::Formatter(const Pluralities& sec_pluralities,
   detailed_format_[TWO_UNITS_DAY_HOUR][1] = InitFormat(day_hour_pluralities2);
 }
 
+Formatter::~Formatter() = default;
+
 void Formatter::Format(Unit unit,
                        int value,
                        icu::UnicodeString* formatted_string) const {
   DCHECK(simple_format_[unit]);
   DCHECK(formatted_string->isEmpty());
   UErrorCode error = U_ZERO_ERROR;
-  FormatNumberInPlural(*simple_format_[unit],
-                        value, formatted_string, &error);
+  FormatNumberInPlural(*simple_format_[unit], value, formatted_string, &error);
   DCHECK(U_SUCCESS(error)) << "Error in icu::PluralFormat::format().";
   return;
 }
@@ -253,11 +332,11 @@ void Formatter::Format(TwoUnits units,
       << "Detailed() not implemented for your (format, length) combination!";
   DCHECK(formatted_string->isEmpty());
   UErrorCode error = U_ZERO_ERROR;
-  FormatNumberInPlural(*detailed_format_[units][0], value_1,
-                       formatted_string, &error);
+  FormatNumberInPlural(*detailed_format_[units][0], value_1, formatted_string,
+                       &error);
   DCHECK(U_SUCCESS(error));
-  FormatNumberInPlural(*detailed_format_[units][1], value_2,
-                        formatted_string, &error);
+  FormatNumberInPlural(*detailed_format_[units][1], value_2, formatted_string,
+                       &error);
   DCHECK(U_SUCCESS(error));
   return;
 }
@@ -296,18 +375,6 @@ std::unique_ptr<icu::MessageFormat> Formatter::InitFormat(
   return CreateFallbackFormat(*rules, pluralities);
 }
 
-const Formatter* FormatterContainer::Get(TimeFormat::Format format,
-                                         TimeFormat::Length length) const {
-  return formatter_[format][length].get();
-}
-
-FormatterContainer::FormatterContainer() {
-  Initialize();
-}
-
-FormatterContainer::~FormatterContainer() {
-}
-
 void FormatterContainer::Initialize() {
   formatter_[TimeFormat::FORMAT_ELAPSED][TimeFormat::LENGTH_SHORT] =
       std::make_unique<Formatter>(IDS_ELAPSED_SHORT_SEC, IDS_ELAPSED_SHORT_MIN,
@@ -317,6 +384,13 @@ void FormatterContainer::Initialize() {
       std::make_unique<Formatter>(IDS_ELAPSED_LONG_SEC, IDS_ELAPSED_LONG_MIN,
                                   IDS_ELAPSED_HOUR, IDS_ELAPSED_DAY,
                                   IDS_ELAPSED_MONTH, IDS_ELAPSED_YEAR);
+#if BUILDFLAG(IS_IOS)
+  formatter_[TimeFormat::FORMAT_TITLE_CASE_ELAPSED][TimeFormat::LENGTH_LONG] =
+      std::make_unique<Formatter>(
+          IDS_TITLE_CASE_ELAPSED_LONG_SEC, IDS_TITLE_CASE_ELAPSED_LONG_MIN,
+          IDS_TITLE_CASE_ELAPSED_HOUR, IDS_TITLE_CASE_ELAPSED_DAY,
+          IDS_TITLE_CASE_ELAPSED_MONTH, IDS_TITLE_CASE_ELAPSED_YEAR);
+#endif
   formatter_[TimeFormat::FORMAT_REMAINING][TimeFormat::LENGTH_SHORT] =
       std::make_unique<Formatter>(
           IDS_REMAINING_SHORT_SEC, IDS_REMAINING_SHORT_MIN, IDS_REMAINING_HOUR,
@@ -338,9 +412,9 @@ void FormatterContainer::Initialize() {
 }
 
 void FormatterContainer::Shutdown() {
-  for (int format = 0; format < TimeFormat::FORMAT_COUNT; ++format) {
-    for (int length = 0; length < TimeFormat::LENGTH_COUNT; ++length) {
-      formatter_[format][length].reset();
+  for (auto& format : formatter_) {
+    for (auto& length : format) {
+      length.reset();
     }
   }
 }

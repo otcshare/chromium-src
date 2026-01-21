@@ -12,35 +12,40 @@
 
 #include <atomic>
 
-#include "base/atomicops.h"
 #include "base/bits.h"
-#include "base/callback.h"
+#include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/memory/asan_interface.h"
 #include "base/memory/madv_free_discardable_memory_allocator_posix.h"
 #include "base/memory/page_size.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/trace_event/memory_allocator_dump.h"
+#include "base/trace_event/memory_dump_manager.h"
 #include "base/tracing_buildflags.h"
 #include "build/build_config.h"
 
-#if BUILDFLAG(ENABLE_BASE_TRACING)
-#include "base/trace_event/memory_allocator_dump.h"  // no-presubmit-check
-#include "base/trace_event/memory_dump_manager.h"    // no-presubmit-check
-#endif  // BUILDFLAG(ENABLE_BASE_TRACING)
-
-#if defined(ADDRESS_SANITIZER)
-#include <sanitizer/asan_interface.h>
-#endif  // defined(ADDRESS_SANITIZER)
+#if BUILDFLAG(IS_ANDROID)
+#include <sys/prctl.h>
+#endif
 
 namespace {
 
 constexpr intptr_t kPageMagicCookie = 1;
 
 void* AllocatePages(size_t size_in_pages) {
-  void* data = mmap(nullptr, size_in_pages * base::GetPageSize(),
-                    PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+  const size_t length = size_in_pages * base::GetPageSize();
+  void* data = mmap(nullptr, length, PROT_READ | PROT_WRITE,
+                    MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   PCHECK(data != MAP_FAILED);
+
+#if BUILDFLAG(IS_ANDROID)
+  prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, data, length,
+        "madv-free-discardable");
+#endif
+
   return data;
 }
 
@@ -101,20 +106,20 @@ bool MadvFreeDiscardableMemoryPosix::Lock() {
   DFAKE_SCOPED_LOCK(thread_collision_warner_);
   DCHECK(!is_locked_);
   // Locking fails if the memory has been deallocated.
-  if (!data_)
+  if (!data_) {
     return false;
+  }
 
-#if defined(ADDRESS_SANITIZER)
   // We need to unpoison here since locking pages writes to them.
   // Note that even if locking fails, we want to unpoison anyways after
   // deallocation.
   ASAN_UNPOISON_MEMORY_REGION(data_, allocated_pages_ * base::GetPageSize());
-#endif  // defined(ADDRESS_SANITIZER)
 
   size_t page_index;
   for (page_index = 0; page_index < allocated_pages_; ++page_index) {
-    if (!LockPage(page_index))
+    if (!LockPage(page_index)) {
       break;
+    }
   }
 
   if (page_index < allocated_pages_) {
@@ -146,9 +151,7 @@ void MadvFreeDiscardableMemoryPosix::Unlock() {
   }
 #endif
 
-#if defined(ADDRESS_SANITIZER)
   ASAN_POISON_MEMORY_REGION(data_, allocated_pages_ * base::GetPageSize());
-#endif  // defined(ADDRESS_SANITIZER)
 
   is_locked_ = false;
 }
@@ -170,8 +173,8 @@ bool MadvFreeDiscardableMemoryPosix::LockPage(size_t page_index) {
                 "Incompatible layout of std::atomic.");
   DCHECK(std::atomic<intptr_t>{}.is_lock_free());
   std::atomic<intptr_t>* page_as_atomic =
-      reinterpret_cast<std::atomic<intptr_t>*>(
-          static_cast<uint8_t*>(data_) + page_index * base::GetPageSize());
+      reinterpret_cast<std::atomic<intptr_t>*>(UNSAFE_TODO(
+          static_cast<uint8_t*>(data_) + page_index * base::GetPageSize()));
 
   intptr_t expected = kPageMagicCookie;
 
@@ -193,8 +196,8 @@ void MadvFreeDiscardableMemoryPosix::UnlockPage(size_t page_index) {
   DCHECK(std::atomic<intptr_t>{}.is_lock_free());
 
   std::atomic<intptr_t>* page_as_atomic =
-      reinterpret_cast<std::atomic<intptr_t>*>(
-          static_cast<uint8_t*>(data_) + page_index * base::GetPageSize());
+      reinterpret_cast<std::atomic<intptr_t>*>(UNSAFE_TODO(
+          static_cast<uint8_t*>(data_) + page_index * base::GetPageSize()));
 
   // Store the first word of the page for use during unlocking.
   page_first_word_[page_index].store(*page_as_atomic,
@@ -208,9 +211,9 @@ void MadvFreeDiscardableMemoryPosix::DiscardPage(size_t page_index) {
   DFAKE_SCOPED_LOCK(thread_collision_warner_);
   DCHECK(!is_locked_);
   DCHECK(page_index < allocated_pages_);
-  int retval =
-      madvise(static_cast<uint8_t*>(data_) + base::GetPageSize() * page_index,
-              base::GetPageSize(), MADV_DONTNEED);
+  int retval = madvise(UNSAFE_TODO(static_cast<uint8_t*>(data_) +
+                                   base::GetPageSize() * page_index),
+                       base::GetPageSize(), MADV_DONTNEED);
   DPCHECK(!retval);
 }
 
@@ -231,7 +234,6 @@ trace_event::MemoryAllocatorDump*
 MadvFreeDiscardableMemoryPosix::CreateMemoryAllocatorDump(
     const char* name,
     trace_event::ProcessMemoryDump* pmd) const {
-#if BUILDFLAG(ENABLE_BASE_TRACING)
   DFAKE_SCOPED_LOCK(thread_collision_warner_);
 
   using base::trace_event::MemoryAllocatorDump;
@@ -276,10 +278,6 @@ MadvFreeDiscardableMemoryPosix::CreateMemoryAllocatorDump(
 
   pmd->AddSuballocation(dump->guid(), allocator_dump_name);
   return dump;
-#else   // BUILDFLAG(ENABLE_BASE_TRACING)
-  NOTREACHED();
-  return nullptr;
-#endif  // BUILDFLAG(ENABLE_BASE_TRACING)
 }
 
 bool MadvFreeDiscardableMemoryPosix::IsValid() const {
@@ -306,8 +304,9 @@ bool MadvFreeDiscardableMemoryPosix::IsResident() const {
   DPCHECK(retval == 0 || errno == EAGAIN);
 
   for (size_t i = 0; i < allocated_pages_; ++i) {
-    if (!(vec[i] & 1))
+    if (!(vec[i] & 1)) {
       return false;
+    }
   }
   return true;
 }
@@ -319,9 +318,7 @@ bool MadvFreeDiscardableMemoryPosix::IsDiscarded() const {
 bool MadvFreeDiscardableMemoryPosix::Deallocate() {
   DFAKE_SCOPED_RECURSIVE_LOCK(thread_collision_warner_);
   if (data_) {
-#if defined(ADDRESS_SANITIZER)
     ASAN_UNPOISON_MEMORY_REGION(data_, allocated_pages_ * base::GetPageSize());
-#endif  // defined(ADDRESS_SANITIZER)
 
     int retval = munmap(data_, allocated_pages_ * base::GetPageSize());
     PCHECK(!retval);

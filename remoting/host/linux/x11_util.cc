@@ -4,9 +4,11 @@
 
 #include "remoting/host/linux/x11_util.h"
 
-#include "base/bind.h"
+#include <utility>
+
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/strings/string_util.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "remoting/base/logging.h"
 #include "ui/gfx/x/future.h"
 #include "ui/gfx/x/randr.h"
@@ -16,20 +18,8 @@
 
 namespace remoting {
 
-ScopedXGrabServer::ScopedXGrabServer(x11::Connection* connection)
-    : connection_(connection) {
-  connection_->GrabServer();
-}
-
-ScopedXGrabServer::~ScopedXGrabServer() {
-  connection_->UngrabServer();
-  connection_->Flush();
-}
-
 bool IgnoreXServerGrabs(x11::Connection* connection, bool ignore) {
-  if (!connection->xtest()
-           .GetVersion({x11::Test::major_version, x11::Test::minor_version})
-           .Sync()) {
+  if (!connection->xtest().present()) {
     return false;
   }
 
@@ -129,7 +119,7 @@ bool IsUsingVideoDummyDriver(x11::Connection* connection) {
             .Sync();
     if (!output_info) {
       LOG(WARNING) << "Cannot get info for output "
-                   << base::to_underlying(output);
+                   << std::to_underlying(output);
       continue;
     }
     auto* output_name = reinterpret_cast<char*>(output_info->name.data());
@@ -140,6 +130,46 @@ bool IsUsingVideoDummyDriver(x11::Connection* connection) {
     }
   }
   return has_only_dummy_outputs;
+}
+
+x11::Atom GetX11Atom(x11::Connection* connection, const std::string& name) {
+  auto reply = connection->InternAtom({false, name}).Sync();
+  if (!reply) {
+    LOG(ERROR) << "Failed to intern atom " << name;
+    return x11::Atom::None;
+  }
+  return reply->atom;
+}
+
+void SetOutputPhysicalSizeInMM(x11::Connection* connection,
+                               x11::RandR::Output output,
+                               int width,
+                               int height) {
+  static const x11::Atom width_mm_atom = GetX11Atom(connection, "WIDTH_MM");
+  static const x11::Atom height_mm_atom = GetX11Atom(connection, "HEIGHT_MM");
+  if (width_mm_atom == x11::Atom::None || height_mm_atom == x11::Atom::None) {
+    return;
+  }
+
+  auto width_32 = static_cast<uint32_t>(width);
+  auto height_32 = static_cast<uint32_t>(height);
+
+  x11::RandR::ChangeOutputPropertyRequest request = {
+      .output = output,
+      .property = width_mm_atom,
+      .type = x11::Atom::INTEGER,
+      .format = 32,
+      .mode = x11::PropMode::Replace,
+      .num_units = 1,
+      .data = base::MakeRefCounted<base::RefCountedStaticMemory>(
+          base::byte_span_from_ref(width_32)),
+  };
+  connection->randr().ChangeOutputProperty(request).Sync();
+
+  request.property = height_mm_atom;
+  request.data = base::MakeRefCounted<base::RefCountedStaticMemory>(
+      base::byte_span_from_ref(height_32));
+  connection->randr().ChangeOutputProperty(request).Sync();
 }
 
 }  // namespace remoting

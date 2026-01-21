@@ -9,6 +9,7 @@
 #include "base/time/time.h"
 #include "cc/animation/animation_timeline.h"
 #include "third_party/blink/renderer/core/animation/animation.h"
+#include "third_party/blink/renderer/core/animation/timeline_range.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/cssom/css_numeric_value.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
@@ -18,6 +19,7 @@
 namespace blink {
 
 class Document;
+class TimelineTrigger;
 
 enum class TimelinePhase { kInactive, kActive };
 
@@ -27,12 +29,9 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
  public:
   struct PhaseAndTime {
     TimelinePhase phase;
-    absl::optional<base::TimeDelta> time;
+    std::optional<base::TimeDelta> time;
     bool operator==(const PhaseAndTime& other) const {
       return phase == other.phase && time == other.time;
-    }
-    bool operator!=(const PhaseAndTime& other) const {
-      return !(*this == other);
     }
   };
 
@@ -44,25 +43,32 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
     return nullptr;
   }
 
-  absl::optional<AnimationTimeDelta> CurrentTime();
-  absl::optional<double> CurrentTimeMilliseconds();
-  absl::optional<double> CurrentTimeSeconds();
+  std::optional<AnimationTimeDelta> CurrentTime();
+  std::optional<double> CurrentTimeMilliseconds();
+  std::optional<double> CurrentTimeSeconds();
 
   virtual V8CSSNumberish* duration();
 
   TimelinePhase Phase() { return CurrentPhaseAndTime().phase; }
 
   virtual bool IsDocumentTimeline() const { return false; }
+  virtual bool IsScrollSnapshotTimeline() const { return false; }
   virtual bool IsScrollTimeline() const { return false; }
-  virtual bool IsCSSScrollTimeline() const { return false; }
   virtual bool IsViewTimeline() const { return false; }
 
+  // Determines which AnimationTimeline instance we should return
+  // from Animation.timeline.
+  virtual AnimationTimeline* ExposedTimeline() { return this; }
+
   virtual bool IsActive() const = 0;
+  virtual bool IsResolved() const { return true; }
   virtual AnimationTimeDelta ZeroTime() = 0;
   // https://w3.org/TR/web-animations-1/#monotonically-increasing-timeline
   // A timeline is monotonically increasing if its reported current time is
   // always greater than or equal than its previously reported current time.
   bool IsMonotonicallyIncreasing() const { return IsDocumentTimeline(); }
+  // https://drafts.csswg.org/web-animations-2/#progress-based-timeline
+  bool IsProgressBased() const { return IsScrollSnapshotTimeline(); }
   // Returns the initial start time for animations that are linked to this
   // timeline. This method gets invoked when initializing the start time of an
   // animation on this timeline for the first time. It exists because the
@@ -71,22 +77,28 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
   //
   // Changing scroll-linked animation start_time initialization is under
   // consideration here: https://github.com/w3c/csswg-drafts/issues/2075.
-  virtual absl::optional<base::TimeDelta> InitialStartTimeForAnimations() = 0;
-  virtual AnimationTimeDelta CalculateIntrinsicIterationDuration(
-      const Timing&) {
-    return AnimationTimeDelta();
+  virtual std::optional<base::TimeDelta> InitialStartTimeForAnimations() = 0;
+
+  AnimationTimeDelta CalculateIntrinsicIterationDuration(
+      const Animation* animation,
+      const Timing& timing) {
+    return CalculateIntrinsicIterationDuration(
+        animation->GetRangeStartInternal(), animation->GetRangeEndInternal(),
+        timing);
   }
 
-  // Converts timeline offsets to start and end delays in time units based on
-  // the timeline duration. In the event that the timeline is not an instance
-  // of a view timeline, the delays are zero.
-  using TimeDelayPair = std::pair<AnimationTimeDelta, AnimationTimeDelta>;
-  virtual TimeDelayPair TimelineOffsetsToTimeDelays(
-      const Timing& timing) const {
-    return std::make_pair(AnimationTimeDelta(), AnimationTimeDelta());
+  AnimationTimeDelta CalculateIntrinsicIterationDuration(
+      const std::optional<TimelineOffset>& range_start,
+      const std::optional<TimelineOffset>& range_end,
+      const Timing& timing) {
+    return CalculateIntrinsicIterationDuration(GetTimelineRange(), range_start,
+                                               range_end, timing);
   }
 
-  Document* GetDocument() const { return document_; }
+  // See class TimelineRange.
+  virtual TimelineRange GetTimelineRange() const { return TimelineRange(); }
+
+  Document* GetDocument() const { return document_.Get(); }
   virtual void AnimationAttached(Animation*);
   virtual void AnimationDetached(Animation*);
 
@@ -97,7 +109,8 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
   // Schedules animation timing update on next frame.
   virtual void ScheduleServiceOnNextFrame();
 
-  Animation* Play(AnimationEffect*, ExceptionState& = ASSERT_NO_EXCEPTION);
+  virtual Animation* Play(AnimationEffect*,
+                          ExceptionState& = ASSERT_NO_EXCEPTION);
 
   virtual bool NeedsAnimationTimingUpdate();
   virtual bool HasAnimations() const { return !animations_.empty(); }
@@ -110,6 +123,9 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
   virtual wtf_size_t AnimationsNeedingUpdateCount() const;
   const HeapHashSet<WeakMember<Animation>>& GetAnimations() const {
     return animations_;
+  }
+  const HeapHashSet<Member<TimelineTrigger>>& GetTriggers() const {
+    return triggers_;
   }
 
   cc::AnimationTimeline* CompositorTimeline() const {
@@ -126,18 +142,29 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
       const PaintArtifactCompositor*);
 
   using ReplaceableAnimationsMap =
-      HeapHashMap<Member<Element>, Member<HeapVector<Member<Animation>>>>;
+      HeapHashMap<Member<Element>, Member<GCedHeapVector<Member<Animation>>>>;
   void getReplaceableAnimations(
       ReplaceableAnimationsMap* replaceable_animation_set);
 
   void Trace(Visitor*) const override;
 
-  virtual absl::optional<AnimationTimeDelta> GetDuration() const {
-    return absl::nullopt;
+  virtual std::optional<AnimationTimeDelta> GetDuration() const {
+    return std::nullopt;
   }
+
+  virtual void AddTrigger(TimelineTrigger* trigger);
+  virtual void RemoveTrigger(TimelineTrigger* trigger);
 
  protected:
   virtual PhaseAndTime CurrentPhaseAndTime() = 0;
+
+  virtual AnimationTimeDelta CalculateIntrinsicIterationDuration(
+      const TimelineRange&,
+      const std::optional<TimelineOffset>& range_start,
+      const std::optional<TimelineOffset>& range_end,
+      const Timing&) {
+    return AnimationTimeDelta();
+  }
 
   Member<Document> document_;
   unsigned outdated_animation_count_;
@@ -146,10 +173,20 @@ class CORE_EXPORT AnimationTimeline : public ScriptWrappable {
   HeapHashSet<Member<Animation>> animations_needing_update_;
   // All animations attached to this timeline.
   HeapHashSet<WeakMember<Animation>> animations_;
+  // Triggers which depend on this timeline.
+  HeapHashSet<Member<TimelineTrigger>> triggers_;
 
   scoped_refptr<cc::AnimationTimeline> compositor_timeline_;
 
-  absl::optional<PhaseAndTime> last_current_phase_and_time_;
+  std::optional<PhaseAndTime> last_current_phase_and_time_;
+
+  bool in_trigger_attachments_update_ = false;
+
+  // Whether or not to update the trigger at the next opportunity to do so.
+  // This could because the |last_current_phase_and_time_| changed or because a
+  // new animation which triggers on this timeline has been added since the last
+  // opportunity for an update.
+  bool update_triggers_;
 };
 
 }  // namespace blink

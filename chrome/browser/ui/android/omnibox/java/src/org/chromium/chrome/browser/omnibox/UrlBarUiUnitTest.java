@@ -4,10 +4,13 @@
 
 package org.chromium.chrome.browser.omnibox;
 
+import static androidx.test.espresso.matcher.ViewMatchers.assertThat;
+
 import android.app.Activity;
 import android.text.TextUtils;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.FrameLayout.LayoutParams;
 
 import androidx.test.filters.SmallTest;
 
@@ -19,20 +22,18 @@ import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 
 import java.util.Collections;
 
-/**
- * Unit tests that rely on UI rendering for UrlBar.
- */
+/** Unit tests that rely on UI rendering for UrlBar. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 public class UrlBarUiUnitTest {
@@ -48,25 +49,33 @@ public class UrlBarUiUnitTest {
     @BeforeClass
     public static void setupSuite() {
         sActivityTestRule.launchActivity(null);
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            sActivity = sActivityTestRule.getActivity();
-            sContentView = new FrameLayout(sActivity);
-            sContentView.setLayoutParams(
-                    new ViewGroup.MarginLayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                            sActivity.getResources().getDimensionPixelSize(
-                                    org.chromium.chrome.R.dimen.control_container_height)));
-            sActivity.setContentView(sContentView);
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    sActivity = sActivityTestRule.getActivity();
+                    sContentView = new FrameLayout(sActivity);
+                    sContentView.setLayoutParams(
+                            new ViewGroup.MarginLayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    sActivity
+                                            .getResources()
+                                            .getDimensionPixelSize(
+                                                    R.dimen.control_container_height)));
+                    sActivity.setContentView(sContentView);
+                });
     }
 
     @Before
     public void setupTest() {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            sContentView.removeAllViews();
-            sActivity.getLayoutInflater().inflate(
-                    org.chromium.chrome.R.layout.url_bar, sContentView);
-            mUrlBar = (UrlBar) sContentView.getChildAt(0);
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    sContentView.removeAllViews();
+                    sActivity.getLayoutInflater().inflate(R.layout.url_bar, sContentView);
+                    mUrlBar = (UrlBar) sContentView.getChildAt(0);
+                    FrameLayout.LayoutParams layoutParams =
+                            (LayoutParams) mUrlBar.getLayoutParams();
+                    layoutParams.width = LayoutParams.MATCH_PARENT;
+                    mUrlBar.setLayoutParams(layoutParams);
+                });
     }
 
     private static void assertTextEquals(CharSequence a, CharSequence b) {
@@ -74,28 +83,29 @@ public class UrlBarUiUnitTest {
     }
 
     private void waitForUrlBarLayout() {
-        CriteriaHelper.pollUiThread(() -> {
-            Criteria.checkThat(mUrlBar.isLayoutRequested(), Matchers.is(false));
-            Criteria.checkThat(mUrlBar.isInLayout(), Matchers.is(false));
-        });
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(mUrlBar.isLayoutRequested(), Matchers.is(false));
+                    Criteria.checkThat(mUrlBar.isInLayout(), Matchers.is(false));
+                });
     }
 
     private void updateUrlBarText(
             CharSequence text, @UrlBar.ScrollType int scrollType, int scrollIndex) {
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mUrlBar.setText(text);
-            mUrlBar.setScrollState(scrollType, scrollIndex);
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mUrlBar.setText(text);
+                    mUrlBar.setScrollState(scrollType, scrollIndex);
+                });
         waitForUrlBarLayout();
     }
 
     private CharSequence getUrlText() {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(() -> mUrlBar.getText());
+        return ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.getText());
     }
 
     private CharSequence getVisibleTextPrefixHint() {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> mUrlBar.getVisibleTextPrefixHint());
+        return ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.getVisibleTextPrefixHint());
     }
 
     @Test
@@ -105,12 +115,14 @@ public class UrlBarUiUnitTest {
         String url = "www.test.com";
         updateUrlBarText(url, UrlBar.ScrollType.SCROLL_TO_TLD, url.length());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            float scrollXPosForEndOfUrlText =
-                    mUrlBar.getLayout().getPrimaryHorizontal(mUrlBar.getText().length());
-            Assert.assertThat(scrollXPosForEndOfUrlText,
-                    Matchers.lessThan((float) mUrlBar.getMeasuredWidth()));
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    float scrollXPosForEndOfUrlText =
+                            mUrlBar.getLayout().getPrimaryHorizontal(mUrlBar.getText().length());
+                    assertThat(
+                            scrollXPosForEndOfUrlText,
+                            Matchers.lessThan((float) mUrlBar.getMeasuredWidth()));
+                });
 
         Assert.assertNull(getVisibleTextPrefixHint());
     }
@@ -123,24 +135,29 @@ public class UrlBarUiUnitTest {
         final String path = "/" + TextUtils.join("", Collections.nCopies(500, "a"));
         updateUrlBarText(domain + path, UrlBar.ScrollType.SCROLL_TO_TLD, domain.length());
 
-        TestThreadUtils.runOnUiThreadBlocking(() -> {
-            float scrollXPosForEndOfUrlText =
-                    mUrlBar.getLayout().getPrimaryHorizontal(mUrlBar.getText().length());
-            Assert.assertThat(scrollXPosForEndOfUrlText,
-                    Matchers.greaterThan((float) mUrlBar.getMeasuredWidth()));
-        });
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    float scrollXPosForEndOfUrlText =
+                            mUrlBar.getLayout().getPrimaryHorizontal(mUrlBar.getText().length());
+                    assertThat(
+                            scrollXPosForEndOfUrlText,
+                            Matchers.greaterThan((float) mUrlBar.getMeasuredWidth()));
+                });
 
-        final CharSequence prefixHint = getVisibleTextPrefixHint();
         CharSequence urlText = getUrlText();
-        Assert.assertNotNull(prefixHint);
-        Assert.assertTrue("Expected url text: '" + urlText + "' starts with " + prefixHint,
-                TextUtils.indexOf(urlText, prefixHint) == 0);
-        Assert.assertThat(prefixHint.length(), Matchers.lessThan(urlText.length()));
+        Assert.assertNull(getVisibleTextPrefixHint());
 
         // Append a string to the already long initial text and validate the prefix doesn't change.
-        updateUrlBarText(getUrlText() + "bbbbbbbbbbbbbbbbbbbbbbb", UrlBar.ScrollType.SCROLL_TO_TLD,
+        updateUrlBarText(
+                getUrlText() + "bbbbbbbbbbbbbbbbbbbbbbb",
+                UrlBar.ScrollType.SCROLL_TO_TLD,
                 domain.length());
-        assertTextEquals(prefixHint, getVisibleTextPrefixHint());
+        final CharSequence prefixHint = getVisibleTextPrefixHint();
+        Assert.assertNotNull(prefixHint);
+        Assert.assertTrue(
+                "Expected url text: '" + urlText + "' starts with " + prefixHint,
+                TextUtils.indexOf(urlText, prefixHint) == 0);
+        assertThat(prefixHint.length(), Matchers.lessThan(urlText.length()));
 
         // Append a character to just the hint prefix text and validate the prefix doesn't change.
         updateUrlBarText(prefixHint + "a", UrlBar.ScrollType.SCROLL_TO_TLD, domain.length());
@@ -155,9 +172,41 @@ public class UrlBarUiUnitTest {
         //
         // We subtract by 2 because an additional trailing char is added to the visible text to
         // account for rounding issues with text positioning.
-        updateUrlBarText(TextUtils.substring(prefixHint, 0, prefixHint.length() - 2),
-                UrlBar.ScrollType.SCROLL_TO_TLD, domain.length());
+        updateUrlBarText(
+                TextUtils.substring(prefixHint, 0, prefixHint.length() - 2),
+                UrlBar.ScrollType.SCROLL_TO_TLD,
+                domain.length());
         Assert.assertNull(getVisibleTextPrefixHint());
+    }
+
+    @Test
+    @SmallTest
+    @Feature("Omnibox")
+    public void testVisibleTextPrefixHint_ShortTld_LongPath_WithRtl() throws Exception {
+        final String domain = "www.test.com";
+        // Add a RTL character shortly after the TLD, so that it is visible.
+        final String path = "/aت" + TextUtils.join("", Collections.nCopies(500, "a"));
+        updateUrlBarText(domain + path, UrlBar.ScrollType.SCROLL_TO_TLD, domain.length());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    float scrollXPosForEndOfUrlText =
+                            mUrlBar.getLayout().getPrimaryHorizontal(mUrlBar.getText().length());
+                    assertThat(
+                            scrollXPosForEndOfUrlText,
+                            Matchers.greaterThan((float) mUrlBar.getMeasuredWidth()));
+                });
+
+        // Assert null visible hint when there is RTl text anywhere in the visible url
+        final CharSequence prefixHint = getVisibleTextPrefixHint();
+        Assert.assertNull(prefixHint);
+
+        // Append a string to the already long initial text and validate the prefix doesn't change.
+        updateUrlBarText(
+                getUrlText() + "bbbbbbbbbbbbbbbbbbbbbbb",
+                UrlBar.ScrollType.SCROLL_TO_TLD,
+                domain.length());
+        Assert.assertNull(prefixHint);
     }
 
     @Test
@@ -174,7 +223,7 @@ public class UrlBarUiUnitTest {
 
         updateUrlBarText(
                 getUrlText() + "/foooooo", UrlBar.ScrollType.SCROLL_TO_TLD, domain.length());
-        assertTextEquals(urlText + "/", getVisibleTextPrefixHint());
+        assertTextEquals(urlText, getVisibleTextPrefixHint());
     }
 
     @Test
@@ -184,8 +233,10 @@ public class UrlBarUiUnitTest {
         updateUrlBarText("a", UrlBar.ScrollType.SCROLL_TO_BEGINNING, 0);
         Assert.assertNull(getVisibleTextPrefixHint());
 
-        updateUrlBarText(TextUtils.join("", Collections.nCopies(500, "a")),
-                UrlBar.ScrollType.SCROLL_TO_BEGINNING, 0);
+        updateUrlBarText(
+                TextUtils.join("", Collections.nCopies(500, "a")),
+                UrlBar.ScrollType.SCROLL_TO_BEGINNING,
+                0);
         Assert.assertNull(getVisibleTextPrefixHint());
     }
 }

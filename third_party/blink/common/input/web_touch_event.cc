@@ -81,6 +81,7 @@ void WebTouchEvent::Coalesce(const WebInputEvent& event) {
   dispatch_type =
       MergeDispatchTypes(old_event.dispatch_type, touch_event.dispatch_type);
   unique_touch_event_id = old_event.unique_touch_event_id;
+  touch_start_or_first_touch_move |= old_event.touch_start_or_first_touch_move;
 }
 
 WebTouchEvent WebTouchEvent::FlattenTransform() const {
@@ -106,6 +107,37 @@ WebTouchPoint WebTouchEvent::TouchPointInRootFrame(unsigned point) const {
       gfx::ScalePoint(transformed_point.PositionInWidget(), 1 / frame_scale_) +
       frame_translate_);
   return transformed_point;
+}
+
+bool WebTouchEvent::IsTouchSequenceStart() const {
+  DCHECK(touches_length ||
+         GetType() == WebInputEvent::Type::kTouchScrollStarted);
+  if (GetType() != WebInputEvent::Type::kTouchStart) {
+    return false;
+  }
+  for (size_t i = 0; i < touches_length; ++i) {
+    if (touches[i].state != WebTouchPoint::State::kStatePressed) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool WebTouchEvent::IsTouchSequenceEnd() const {
+  if (GetType() != WebInputEvent::Type::kTouchEnd &&
+      GetType() != WebInputEvent::Type::kTouchCancel) {
+    return false;
+  }
+  if (!touches_length) {
+    return true;
+  }
+  for (size_t i = 0; i < touches_length; ++i) {
+    if (touches[i].state != WebTouchPoint::State::kStateReleased &&
+        touches[i].state != WebTouchPoint::State::kStateCancelled) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace blink

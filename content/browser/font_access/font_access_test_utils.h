@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_FONT_ACCESS_FONT_ACCESS_TEST_UTILS_H_
 #define CONTENT_BROWSER_FONT_ACCESS_FONT_ACCESS_TEST_UTILS_H_
 
+#include "content/public/browser/permission_result.h"
 #include "content/public/test/mock_permission_manager.h"
 
 namespace blink {
@@ -12,6 +13,7 @@ enum class PermissionType;
 }
 
 namespace content {
+struct PermissionRequestDescription;
 
 class TestFontAccessPermissionManager : public MockPermissionManager {
  public:
@@ -24,20 +26,19 @@ class TestFontAccessPermissionManager : public MockPermissionManager {
 
   ~TestFontAccessPermissionManager() override;
 
-  using PermissionCallback = base::OnceCallback<void(
-      const std::vector<blink::mojom::PermissionStatus>&)>;
+  using PermissionCallback =
+      base::OnceCallback<void(const std::vector<PermissionResult>&)>;
 
   void RequestPermissionsFromCurrentDocument(
-      const std::vector<blink::PermissionType>& permissions,
-      content::RenderFrameHost* render_frame_host,
-      bool user_gesture,
-      base::OnceCallback<
-          void(const std::vector<blink::mojom::PermissionStatus>&)> callback)
+      RenderFrameHost* render_frame_host,
+      const PermissionRequestDescription& request_description,
+      base::OnceCallback<void(const std::vector<PermissionResult>&)> callback)
       override;
 
-  blink::mojom::PermissionStatus GetPermissionStatusForCurrentDocument(
-      blink::PermissionType permission,
-      RenderFrameHost* render_frame_host) override;
+  PermissionResult GetPermissionResultForCurrentDocument(
+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+      RenderFrameHost* render_frame_host,
+      bool should_include_device_status) override;
 
   void SetRequestCallback(
       base::RepeatingCallback<void(PermissionCallback)> request_callback) {

@@ -5,12 +5,12 @@
 #ifndef DEVICE_VR_VR_DEVICE_BASE_H_
 #define DEVICE_VR_VR_DEVICE_BASE_H_
 
-#include "base/callback.h"
 #include "base/component_export.h"
 #include "build/build_config.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
-#include "device/vr/vr_device.h"
+#include "device/vr/public/mojom/xr_device.mojom.h"
+#include "device/vr/public/mojom/xr_session.mojom.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -64,6 +64,7 @@ class COMPONENT_EXPORT(DEVICE_VR_BASE) VRDeviceBase : public mojom::XRRuntime {
   void SetArBlendModeSupported(bool is_ar_blend_mode_supported);
   void SetSupportedFeatures(
       const std::vector<mojom::XRSessionFeature>& features);
+  void SetDeviceData(device::mojom::XRDeviceData&& device_data);
 #if BUILDFLAG(IS_WIN)
   void SetLuid(const CHROME_LUID& luid);
 #endif

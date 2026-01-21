@@ -19,9 +19,9 @@
 #include "ash/keyboard/ui/shaped_window_targeter.h"
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
-#include "base/bind.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
@@ -70,20 +70,6 @@ constexpr base::TimeDelta kReportLingeringStateDelay = base::Milliseconds(5000);
 // after the user enters their username.
 constexpr base::TimeDelta kTransientBlurThreshold = base::Milliseconds(3500);
 
-// An enumeration of different keyboard control events that should be logged.
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class KeyboardControlEvent {
-  kShow = 0,
-  kHideAuto = 1,
-  kHideUser = 2,
-  kMaxValue = kHideUser
-};
-
-void LogKeyboardControlEvent(KeyboardControlEvent event) {
-  UMA_HISTOGRAM_ENUMERATION("VirtualKeyboard.KeyboardControlEvent", event);
-}
-
 class VirtualKeyboardController : public ui::VirtualKeyboardController {
  public:
   explicit VirtualKeyboardController(
@@ -127,7 +113,7 @@ class VirtualKeyboardController : public ui::VirtualKeyboardController {
   }
 
  private:
-  KeyboardUIController* keyboard_ui_controller_;
+  raw_ptr<KeyboardUIController> keyboard_ui_controller_;
   base::ObserverList<ui::VirtualKeyboardControllerObserver>::Unchecked
       observer_list_;
 };
@@ -251,7 +237,7 @@ void KeyboardUIController::DisableKeyboard() {
   if (model_.state() != KeyboardUIState::kInitial)
     ChangeState(KeyboardUIState::kInitial);
 
-  // TODO(https://crbug.com/731537): Move KeyboardUIController members into a
+  // TODO(crbug.com/40524972): Move KeyboardUIController members into a
   // subobject so we can just put this code into the subobject destructor.
   queued_display_change_.reset();
   queued_container_type_.reset();
@@ -328,7 +314,8 @@ void KeyboardUIController::MoveToParentContainer(aura::Window* parent) {
 
 // private
 void KeyboardUIController::NotifyKeyboardBoundsChanging(
-    const gfx::Rect& new_bounds_in_root) {
+    const gfx::Rect& new_bounds_in_root,
+    bool is_temporary) {
   gfx::Rect occluded_bounds_in_screen;
   aura::Window* window = GetKeyboardWindow();
   if (window && window->IsVisible()) {
@@ -340,10 +327,11 @@ void KeyboardUIController::NotifyKeyboardBoundsChanging(
     // TODO(andrewxu): Add the unit test case for issue 960174.
     occluded_bounds_in_screen = GetWorkspaceOccludedBoundsInScreen();
 
-    // TODO(https://crbug.com/943446): Use screen bounds for visual bounds.
+    // TODO(crbug.com/40619022): Use screen bounds for visual bounds.
     notification_manager_.SendNotifications(
         container_behavior_->OccludedBoundsAffectWorkspaceLayout(),
-        new_bounds_in_root, occluded_bounds_in_screen, observer_list_);
+        new_bounds_in_root, occluded_bounds_in_screen, is_temporary,
+        observer_list_);
   } else {
     visual_bounds_in_root_ = gfx::Rect();
     occluded_bounds_in_screen = GetWorkspaceOccludedBoundsInScreen();
@@ -421,7 +409,7 @@ bool KeyboardUIController::UpdateKeyboardConfig(const KeyboardConfig& config) {
 }
 
 void KeyboardUIController::SetEnableFlag(KeyboardEnableFlag flag) {
-  if (!base::Contains(keyboard_enable_flags_, flag))
+  if (!keyboard_enable_flags_.contains(flag))
     keyboard_enable_flags_.insert(flag);
 
   // If there is a flag that is mutually exclusive with |flag|, clear it.
@@ -458,7 +446,7 @@ void KeyboardUIController::ClearEnableFlag(KeyboardEnableFlag flag) {
 }
 
 bool KeyboardUIController::IsEnableFlagSet(KeyboardEnableFlag flag) const {
-  return base::Contains(keyboard_enable_flags_, flag);
+  return keyboard_enable_flags_.contains(flag);
 }
 
 bool KeyboardUIController::IsKeyboardEnableRequested() const {
@@ -561,20 +549,8 @@ void KeyboardUIController::HideKeyboard(HideReason reason) {
 
     case KeyboardUIState::kWillHide:
     case KeyboardUIState::kShown: {
-      // Log whether this was a user or system (automatic) action.
-      switch (reason) {
-        case HIDE_REASON_SYSTEM_EXPLICIT:
-        case HIDE_REASON_SYSTEM_IMPLICIT:
-        case HIDE_REASON_SYSTEM_TEMPORARY:
-          LogKeyboardControlEvent(KeyboardControlEvent::kHideAuto);
-          break;
-        case HIDE_REASON_USER_EXPLICIT:
-        case HIDE_REASON_USER_IMPLICIT:
-          LogKeyboardControlEvent(KeyboardControlEvent::kHideUser);
-          break;
-      }
-
-      NotifyKeyboardBoundsChanging(gfx::Rect());
+      NotifyKeyboardBoundsChanging(gfx::Rect(),
+                                   reason == HIDE_REASON_SYSTEM_TEMPORARY);
 
       set_keyboard_locked(false);
 
@@ -658,8 +634,6 @@ void KeyboardUIController::HideAnimationFinished() {
 
 // private
 void KeyboardUIController::ShowAnimationFinished() {
-  MarkKeyboardLoadFinished();
-
   // Notify observers after animation finished to prevent reveal desktop
   // background during animation.
   // If the current state is not SHOWN, it means the state was changed after the
@@ -715,7 +689,7 @@ void KeyboardUIController::LoadKeyboardWindowInBackground() {
 
   // For now, using Unretained is safe here because the |ui_| is owned by
   // |this| and the callback does not outlive |ui_|.
-  // TODO(https://crbug.com/845780): Use a weak ptr here in case this
+  // TODO(crbug.com/40577582): Use a weak ptr here in case this
   // assumption changes.
   DVLOG(1) << "LoadKeyboardWindow";
   aura::Window* keyboard_window = ui_->LoadKeyboardWindow(
@@ -842,8 +816,14 @@ void KeyboardUIController::OnTextInputStateChanged(
 }
 
 void KeyboardUIController::ShowKeyboardIfWithinTransientBlurThreshold() {
-  if (base::Time::Now() - time_of_last_blur_ < kTransientBlurThreshold)
+  if (should_show_on_transient_blur_ &&
+      base::Time::Now() - time_of_last_blur_ < kTransientBlurThreshold) {
     ShowKeyboard(false);
+  }
+}
+
+void KeyboardUIController::SetShouldShowOnTransientBlur(bool should_show) {
+  should_show_on_transient_blur_ = should_show;
 }
 
 void KeyboardUIController::OnVirtualKeyboardVisibilityChangedIfEnabled(
@@ -860,7 +840,6 @@ void KeyboardUIController::OnVirtualKeyboardVisibilityChangedIfEnabled(
 
 void KeyboardUIController::ShowKeyboardInternal(
     aura::Window* target_container) {
-  MarkKeyboardLoadStarted();
   PopulateKeyboardContent(target_container);
   UpdateInputMethodObserver();
 }
@@ -904,7 +883,6 @@ void KeyboardUIController::PopulateKeyboardContent(
   // are at begin states for animation.
   container_behavior_->InitializeShowAnimationStartingState(keyboard_window);
 
-  LogKeyboardControlEvent(KeyboardControlEvent::kShow);
   RecordUkmKeyboardShown();
 
   ui::LayerAnimator* container_animator =
@@ -970,8 +948,6 @@ void KeyboardUIController::ChangeState(KeyboardUIState state) {
 void KeyboardUIController::ReportLingeringState() {
   LOG(ERROR) << "KeyboardUIController lingering in "
              << StateToStr(model_.state());
-  UMA_HISTOGRAM_ENUMERATION("VirtualKeyboard.LingeringIntermediateState",
-                            model_.state());
 }
 
 gfx::Rect KeyboardUIController::GetWorkspaceOccludedBoundsInScreen() const {
@@ -1161,26 +1137,6 @@ void KeyboardUIController::EnsureCaretInWorkArea(
   } else if (ime->GetTextInputClient()) {
     ime->GetTextInputClient()->EnsureCaretNotInRect(occluded_bounds_in_screen);
   }
-}
-
-void KeyboardUIController::MarkKeyboardLoadStarted() {
-  if (!keyboard_load_time_logged_)
-    keyboard_load_time_start_ = base::Time::Now();
-}
-
-void KeyboardUIController::MarkKeyboardLoadFinished() {
-  // Possible to get a load finished without a start if navigating directly to
-  // chrome://keyboard.
-  if (keyboard_load_time_start_.is_null())
-    return;
-
-  if (keyboard_load_time_logged_)
-    return;
-
-  // Log the delta only once.
-  UMA_HISTOGRAM_TIMES("VirtualKeyboard.InitLatency.FirstLoad",
-                      base::Time::Now() - keyboard_load_time_start_);
-  keyboard_load_time_logged_ = true;
 }
 
 void KeyboardUIController::EnableFlagsChanged() {

@@ -8,18 +8,20 @@
 #include <string>
 #include <unordered_set>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/types/optional_util.h"
 #include "content/browser/bluetooth/bluetooth_blocklist.h"
 #include "content/browser/bluetooth/bluetooth_metrics.h"
 #include "content/browser/bluetooth/bluetooth_util.h"
 #include "content/browser/bluetooth/web_bluetooth_service_impl.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/bluetooth_delegate.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -46,41 +48,18 @@ namespace {
 // signal strength levels, thus we want to spread RSSI values out evenly accross
 // displayed levels.
 //
-// RSSI values from UMA in RecordRSSISignalStrength are charted here:
-// https://photos.app.goo.gl/6R0ksxWzBsfvrbXH2 (2017-10-18)
-// with a copy-paste of table data at every 5dBm:
-//  dBm   CDF* Histogram Bucket Quantity (hand drawn estimate)
-// -100 00.26%
-//  -95 01.22% ---
-//  -90 04.14% -----------
-//  -85 11.24% ----------------------------
-//  -80 18.29% ----------------------------
-//  -75 27.13% -----------------------------------
-//  -70 37.72% ------------------------------------------
-//  -65 49.42% ----------------------------------------------
-//  -60 62.91% -----------------------------------------------------
-//  -55 74.35% ---------------------------------------------
-//  -50 83.07% ----------------------------------
-//  -45 88.43% ---------------------
-//  -40 92.41% ---------------
-//  -35 94.84% ---------
-//  -30 95.96% ----
-//  -25 96.60% --
-//  -20 96.90% -
-//  -15 97.07%
-//  -10 97.21%
-//   -5 97.34%
-//    0 97.47%
+// Real-world RSSI values from UMA in RecordRSSISignalStrength are used to
+// select 4 threshold points equally spaced through the CDF.
 //
 // CDF: Cumulative Distribution Function:
 // https://en.wikipedia.org/wiki/Cumulative_distribution_function
 //
-// Conversion to signal strengths is done by selecting 4 threshold points
-// equally spaced through the CDF.
-const int k20thPercentileRSSI = -79;
-const int k40thPercentileRSSI = -69;
-const int k60thPercentileRSSI = -61;
-const int k80thPercentileRSSI = -52;
+// This data was last updated using a 28-day average of metrics recorded on
+// 2024-03-10.
+const int k20thPercentileRSSI = -83;
+const int k40thPercentileRSSI = -76;
+const int k60thPercentileRSSI = -68;
+const int k80thPercentileRSSI = -57;
 
 // Client name for logging in BLE scanning.
 constexpr char kScanClientName[] = "Web Bluetooth Device Chooser";
@@ -164,7 +143,7 @@ bool MatchesFilter(const std::string* device_name,
 
   if (filter->services) {
     for (const auto& service : filter->services.value()) {
-      if (!base::Contains(device_uuids, service)) {
+      if (!device_uuids.contains(service)) {
         return false;
       }
     }
@@ -190,8 +169,8 @@ bool MatchesFilters(
     const std::string* device_name,
     const UUIDSet& device_uuids,
     const ManufacturerDataMap& device_manufacturer_data,
-    const absl::optional<
-        std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>>& filters) {
+    const std::optional<std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>>&
+        filters) {
   DCHECK(HasValidFilter(filters));
   for (const auto& filter : filters.value()) {
     if (MatchesFilter(device_name, device_uuids, device_manufacturer_data,
@@ -212,6 +191,46 @@ void StopDiscoverySession(
 
 }  // namespace
 
+BluetoothDeviceChooserController::BluetoothDeviceRequestPromptInfo::
+    BluetoothDeviceRequestPromptInfo(
+        BluetoothDeviceChooserController& controller)
+    : controller_(controller) {}
+
+BluetoothDeviceChooserController::BluetoothDeviceRequestPromptInfo::
+    ~BluetoothDeviceRequestPromptInfo() = default;
+
+std::vector<DevtoolsDeviceRequestPromptDevice>
+BluetoothDeviceChooserController::BluetoothDeviceRequestPromptInfo::
+    GetDevices() {
+  std::vector<DevtoolsDeviceRequestPromptDevice> devices;
+  for (auto& device_id : controller_->device_ids_) {
+    auto* device = controller_->adapter_->GetDevice(device_id);
+    if (device != nullptr) {
+      devices.push_back(
+          {device_id, base::UTF16ToUTF8(device->GetNameForDisplay())});
+    }
+  }
+  return devices;
+}
+
+bool BluetoothDeviceChooserController::BluetoothDeviceRequestPromptInfo::
+    SelectDevice(const std::string& select_device_id) {
+  for (auto& device_id : controller_->device_ids_) {
+    auto* device = controller_->adapter_->GetDevice(device_id);
+    if (device != nullptr && device_id == select_device_id) {
+      controller_->OnBluetoothChooserEvent(BluetoothChooserEvent::SELECTED,
+                                           select_device_id);
+      return true;
+    }
+  }
+  return false;
+}
+
+void BluetoothDeviceChooserController::BluetoothDeviceRequestPromptInfo::
+    Cancel() {
+  controller_->OnBluetoothChooserEvent(BluetoothChooserEvent::CANCELLED, "");
+}
+
 BluetoothDeviceChooserController::BluetoothDeviceChooserController(
     WebBluetoothServiceImpl* web_bluetooth_service,
     RenderFrameHost& render_frame_host,
@@ -219,6 +238,7 @@ BluetoothDeviceChooserController::BluetoothDeviceChooserController(
     : adapter_(std::move(adapter)),
       web_bluetooth_service_(web_bluetooth_service),
       render_frame_host_(render_frame_host),
+      prompt_info_(*this),
       discovery_session_timer_(
           FROM_HERE,
           base::Seconds(scan_duration_),
@@ -236,6 +256,9 @@ BluetoothDeviceChooserController::~BluetoothDeviceChooserController() {
                              /*options=*/nullptr,
                              /*device_id=*/std::string());
   }
+
+  devtools_instrumentation::CleanUpDeviceRequestPrompt(&*render_frame_host_,
+                                                       &prompt_info_);
 }
 
 void BluetoothDeviceChooserController::GetDevice(
@@ -301,6 +324,10 @@ void BluetoothDeviceChooserController::GetDevice(
     return;
   }
 
+  CheckAdapterAndStartGettingDevices();
+}
+
+void BluetoothDeviceChooserController::CheckAdapterAndStartGettingDevices() {
   if (adapter_->GetOsPermissionStatus() ==
       device::BluetoothAdapter::PermissionStatus::kDenied) {
     chooser_->SetAdapterPresence(
@@ -329,25 +356,37 @@ void BluetoothDeviceChooserController::GetDevice(
   }
 
   StartDeviceDiscovery();
+
+  devtools_instrumentation::UpdateDeviceRequestPrompt(&*render_frame_host_,
+                                                      &prompt_info_);
 }
 
 void BluetoothDeviceChooserController::AddFilteredDevice(
     const device::BluetoothDevice& device) {
-  absl::optional<std::string> device_name = device.GetName();
-  if (chooser_.get()) {
-    if (options_->accept_all_devices ||
-        MatchesFilters(device_name ? &device_name.value() : nullptr,
-                       device.GetUUIDs(), device.GetManufacturerData(),
-                       options_->filters)) {
-      absl::optional<int8_t> rssi = device.GetInquiryRSSI();
-      std::string device_id = device.GetAddress();
-      device_ids_.insert(device_id);
-      chooser_->AddOrUpdateDevice(
-          device_id, !!device.GetName() /* should_update_name */,
-          device.GetNameForDisplay(), device.IsGattConnected(),
-          web_bluetooth_service_->IsDevicePaired(device.GetAddress()),
-          rssi ? CalculateSignalStrengthLevel(rssi.value()) : -1);
-    }
+  if (!chooser_) {
+    // If the dialog's closing, no need to do any of the rest of this.
+    return;
+  }
+  const bool device_matches =
+      options_->filters.has_value() &&
+      MatchesFilters(base::OptionalToPtr(device.GetName()), device.GetUUIDs(),
+                     device.GetManufacturerData(), options_->filters);
+  const bool device_excluded =
+      options_->exclusion_filters.has_value() &&
+      MatchesFilters(base::OptionalToPtr(device.GetName()), device.GetUUIDs(),
+                     device.GetManufacturerData(), options_->exclusion_filters);
+  if (options_->accept_all_devices || (device_matches && !device_excluded)) {
+    std::optional<int8_t> rssi = device.GetInquiryRSSI();
+    std::string device_id = device.GetAddress();
+    device_ids_.insert(device_id);
+    chooser_->AddOrUpdateDevice(
+        device_id, !!device.GetName() /* should_update_name */,
+        device.GetNameForDisplay(), device.IsGattConnected(),
+        web_bluetooth_service_->IsDevicePaired(device.GetAddress()),
+        rssi ? CalculateSignalStrengthLevel(rssi.value()) : -1);
+
+    devtools_instrumentation::UpdateDeviceRequestPrompt(&*render_frame_host_,
+                                                        &prompt_info_);
   }
 }
 
@@ -376,19 +415,19 @@ int BluetoothDeviceChooserController::CalculateSignalStrengthLevel(
   RecordRSSISignalStrength(rssi);
 
   if (rssi < k20thPercentileRSSI) {
-    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::LEVEL_0);
+    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::kLevel0);
     return 0;
   } else if (rssi < k40thPercentileRSSI) {
-    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::LEVEL_1);
+    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::kLevel1);
     return 1;
   } else if (rssi < k60thPercentileRSSI) {
-    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::LEVEL_2);
+    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::kLevel2);
     return 2;
   } else if (rssi < k80thPercentileRSSI) {
-    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::LEVEL_3);
+    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::kLevel3);
     return 3;
   } else {
-    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::LEVEL_4);
+    RecordRSSISignalStrengthLevel(content::UMARSSISignalStrengthLevel::kLevel4);
     return 4;
   }
 }
@@ -406,7 +445,8 @@ void BluetoothDeviceChooserController::SetTestScanDurationForTesting(
 }
 
 void BluetoothDeviceChooserController::PopulateConnectedDevices() {
-  // TODO(crbug.com/728897): Use RetrieveGattConnectedDevices once implemented.
+  // TODO(crbug.com/41322850): Use RetrieveGattConnectedDevices once
+  // implemented.
   for (const device::BluetoothDevice* device : adapter_->GetDevices()) {
     if (device->IsGattConnected()) {
       AddFilteredDevice(*device);
@@ -470,9 +510,8 @@ void BluetoothDeviceChooserController::OnBluetoothChooserEvent(
   switch (event) {
     case BluetoothChooserEvent::RESCAN:
       device_ids_.clear();
-      PopulateConnectedDevices();
       DCHECK(chooser_);
-      StartDeviceDiscovery();
+      CheckAdapterAndStartGettingDevices();
       // No need to close the chooser so we return.
       return;
     case BluetoothChooserEvent::DENIED_PERMISSION:
@@ -529,8 +568,8 @@ void BluetoothDeviceChooserController::PostErrorCallback(
 // static
 std::unique_ptr<device::BluetoothDiscoveryFilter>
 BluetoothDeviceChooserController::ComputeScanFilter(
-    const absl::optional<
-        std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>>& filters) {
+    const std::optional<std::vector<blink::mojom::WebBluetoothLeScanFilterPtr>>&
+        filters) {
   // There isn't much support for GATT over BR/EDR from neither platforms nor
   // devices so performing a Dual scan will find devices that the API is not
   // able to interact with. To avoid wasting power and confusing users with

@@ -5,8 +5,11 @@
 #include "components/segmentation_platform/embedder/default_model/feed_user_segment.h"
 
 #include "components/segmentation_platform/embedder/default_model/default_model_test_base.h"
+#include "components/segmentation_platform/public/constants.h"
 
 namespace segmentation_platform {
+
+using Feature = FeedUserSegment::Feature;
 
 class FeedUserModelTest : public DefaultModelTestBase {
  public:
@@ -23,23 +26,13 @@ TEST_F(FeedUserModelTest, ExecuteModelWithInput) {
   ExpectInitAndFetchModel();
   ASSERT_TRUE(fetched_metadata_);
 
-  std::string subsegment_key = GetSubsegmentKey(kFeedUserSegmentationKey);
-  ModelProvider::Request input(11, 0);
-  ExecuteWithInputAndCheckSubsegmentName<FeedUserSegment>(
-      input, subsegment_key, /*sub_segment_name=*/"NoNTPOrHomeOpened");
+  ModelProvider::Request input(Feature::kFeatureCount, 0);
+  ExpectClassifierResults(input, {kLegacyNegativeLabel});
 
-  input[1] = 3;
-  input[2] = 2;
-  ExecuteWithInputAndCheckSubsegmentName<FeedUserSegment>(
-      input, subsegment_key, /*sub_segment_name=*/"UsedNtpWithoutModules");
-
-  input[0] = 3;
-  ExecuteWithInputAndCheckSubsegmentName<FeedUserSegment>(
-      input, subsegment_key, /*sub_segment_name=*/"MvtOnly");
-
-  input[8] = 3;
-  ExecuteWithInputAndCheckSubsegmentName<FeedUserSegment>(
-      input, subsegment_key, /*sub_segment_name=*/"NtpAndFeedEngagedSimple");
+  input[Feature::kFeatureFeedEngagementSimple] = 3;
+  ExpectClassifierResults(
+      input, {SegmentIdToHistogramVariant(
+                 SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_FEED_USER)});
 
   EXPECT_FALSE(ExecuteWithInput(/*inputs=*/{}));
   EXPECT_FALSE(ExecuteWithInput(/*inputs=*/{1, 2}));

@@ -5,8 +5,8 @@
 #ifndef DEVICE_BLUETOOTH_DBUS_FAKE_BLUETOOTH_DEBUG_MANAGER_CLIENT_H_
 #define DEVICE_BLUETOOTH_DBUS_FAKE_BLUETOOTH_DEBUG_MANAGER_CLIENT_H_
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "dbus/object_path.h"
 #include "dbus/property.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -29,10 +29,6 @@ class DEVICE_BLUETOOTH_EXPORT FakeBluetoothDebugManagerClient
                     const uint8_t kernel_level,
                     base::OnceClosure callback,
                     ErrorCallback error_callback) override;
-
-  void SetDevCoredump(const bool enable,
-                      base::OnceClosure callback,
-                      ErrorCallback error_callback) override {}
 
   void SetLLPrivacy(const bool enable,
                     base::OnceClosure callback,

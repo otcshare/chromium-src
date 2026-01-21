@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
@@ -20,6 +19,7 @@ char kPatternSwitch[] = "pattern";
 char kSafariSwitch[] = "safari";
 
 char kFiltersSwitch[] = "filters";
+char kSubtreeSwitch[] = "subtree";
 
 #if BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_MAC)
 char kIdSwitch[] = "pid";
@@ -83,6 +83,9 @@ void PrintHelpFilters() {
       "  --filters\tfile containing property filters used to filter out\n"
       "  \t\taccessible tree, for example:\n"
       "  \t\t--filters=/absolute/path/to/filters/file\n");
+  printf(
+      "  --subtree\tpattern to match for dumping only a subtree, for example:\n"
+      "  \t\t--subtree=\"++[embedded]\"\n");
 }
 
 void PrintHelpFooter() {
@@ -92,7 +95,7 @@ void PrintHelpFooter() {
       "automated-testing/ax-inspect\n");
 }
 
-absl::optional<AXTreeSelector> TreeSelectorFromCommandLine(
+std::optional<AXTreeSelector> TreeSelectorFromCommandLine(
     const base::CommandLine& command_line) {
   int selectors = AXTreeSelector::None;
   if (command_line.HasSwitch(kChromeSwitch)) {
@@ -116,7 +119,7 @@ absl::optional<AXTreeSelector> TreeSelectorFromCommandLine(
     unsigned hwnd_or_pid = 0;
     if (!StringToInt(id_str, &hwnd_or_pid)) {
       LOG(ERROR) << "Error: can't convert window id string to integer.";
-      return absl::nullopt;
+      return std::nullopt;
     }
     return AXTreeSelector(selectors, pattern_str,
                           CastToAcceleratedWidget(hwnd_or_pid));
@@ -140,31 +143,36 @@ std::string DirectivePrefixFromAPIType(ui::AXApiType::Type api) {
   }
 }
 
-absl::optional<ui::AXInspectScenario> ScenarioFromCommandLine(
+std::optional<ui::AXInspectScenario> ScenarioFromCommandLine(
     const base::CommandLine& command_line,
     ui::AXApiType::Type api) {
   base::FilePath filters_path = command_line.GetSwitchValuePath(kFiltersSwitch);
   if (filters_path.empty() && command_line.HasSwitch(kFiltersSwitch)) {
     LOG(ERROR) << "Error: empty filter path given. Run with --help for help.";
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   std::string directive_prefix = DirectivePrefixFromAPIType(api);
 
   // Return with the default filter scenario if no file is provided.
   if (filters_path.empty()) {
-    return ui::AXInspectScenario::From(directive_prefix,
-                                       std::vector<std::string>());
+    ui::AXInspectScenario scenario = ui::AXInspectScenario::From(
+        directive_prefix, std::vector<std::string>());
+    // Set subtree pattern if provided.
+    scenario.subtree_pattern = command_line.GetSwitchValueASCII(kSubtreeSwitch);
+    return scenario;
   }
 
-  absl::optional<ui::AXInspectScenario> scenario =
+  std::optional<ui::AXInspectScenario> scenario =
       ui::AXInspectScenario::From(directive_prefix, filters_path);
   if (!scenario) {
     LOG(ERROR) << "Error: failed to open filters file " << filters_path
                << ". Note: path traversal components ('..') are not allowed "
                   "for security reasons";
-    return absl::nullopt;
+    return std::nullopt;
   }
+  // Set subtree pattern if provided.
+  scenario->subtree_pattern = command_line.GetSwitchValueASCII(kSubtreeSwitch);
   return scenario;
 }
 

@@ -5,8 +5,8 @@
 #ifndef COMPONENTS_DEVICE_SIGNALS_TEST_SIGNALS_CONTRACT_H_
 #define COMPONENTS_DEVICE_SIGNALS_TEST_SIGNALS_CONTRACT_H_
 
-#include "base/callback_forward.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_forward.h"
 #include "base/values.h"
 
 namespace device_signals::test {
@@ -16,7 +16,16 @@ namespace device_signals::test {
 // This represents the inline flow contract.
 base::flat_map<std::string,
                base::RepeatingCallback<bool(const base::Value::Dict&)>>
-GetSignalsContract();
+GetSignalsContract(bool is_av_signal_enabled);
+
+#if BUILDFLAG(IS_CHROMEOS)
+// Returns a map from a signal name to a predicate which evaluates an
+// expectation based on a given signals dictionary.
+// This represents the inline flow contract for unmanaged devices (crOS).
+base::flat_map<std::string,
+               base::RepeatingCallback<bool(const base::Value::Dict&)>>
+GetSignalsContractForUnmanagedDevices(bool is_av_signal_enabled);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace device_signals::test
 

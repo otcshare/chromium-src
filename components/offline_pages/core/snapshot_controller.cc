@@ -4,9 +4,10 @@
 
 #include "components/offline_pages/core/snapshot_controller.h"
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "components/offline_pages/core/offline_page_feature.h"
 
@@ -42,7 +43,7 @@ SnapshotController::SnapshotController(
   }
 }
 
-SnapshotController::~SnapshotController() {}
+SnapshotController::~SnapshotController() = default;
 
 void SnapshotController::Reset() {
   // Cancel potentially delayed tasks that relate to the previous 'session'.
@@ -64,6 +65,12 @@ void SnapshotController::PendingSnapshotCompleted() {
 }
 
 void SnapshotController::PrimaryMainDocumentElementAvailable() {
+  if (state_ == State::STOPPED) {
+    // We don't need to schedule a delayed task if the controller is stopped
+    // because the controller can restart only when Reset() is called which also
+    // resets queued delayed tasks.
+    return;
+  }
   DCHECK_EQ(PageQuality::POOR, current_page_quality_);
   // Post a delayed task to snapshot.
   task_runner_->PostDelayedTask(
@@ -75,6 +82,12 @@ void SnapshotController::PrimaryMainDocumentElementAvailable() {
 }
 
 void SnapshotController::DocumentOnLoadCompletedInPrimaryMainFrame() {
+  if (state_ == State::STOPPED) {
+    // We don't need to schedule a delayed task if the controller is stopped
+    // because the controller can restart only when Reset() is called which also
+    // resets queued delayed tasks.
+    return;
+  }
   // Post a delayed task to snapshot and then stop this controller.
   task_runner_->PostDelayedTask(
       FROM_HERE,

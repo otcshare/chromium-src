@@ -2,17 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/renderer_host/private_network_access_util.h"
+
 #include <array>
 #include <ostream>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
-#include "content/browser/renderer_host/private_network_access_util.h"
-
 #include "base/command_line.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/test/scoped_feature_list.h"
+#include "content/common/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -22,6 +26,7 @@ namespace content {
 namespace {
 
 using AddressSpace = network::mojom::IPAddressSpace;
+using RequestContext = PrivateNetworkRequestContext;
 using Policy = network::mojom::PrivateNetworkRequestPolicy;
 
 using ::testing::ElementsAreArray;
@@ -30,217 +35,630 @@ using ::testing::ElementsAreArray;
 constexpr bool kNonSecure = false;
 constexpr bool kSecure = true;
 
+// Self-descriptive constants for `allow_on_non_secure_context`.
+constexpr bool kDisallowNonSecure = false;
+constexpr bool kAllowNonSecure = true;
+
 // Input arguments to `DerivePrivateNetworkRequestPolicy()`.
 struct DerivePolicyInput {
   bool is_web_secure_context;
+  bool allow_on_non_secure_context;
   AddressSpace address_space;
-  PrivateNetworkRequestContext private_network_request_context;
-
-  // Helper for comparison operators.
-  std::tuple<bool, AddressSpace, PrivateNetworkRequestContext> ToTuple() const {
-    return {is_web_secure_context, address_space,
-            private_network_request_context};
-  }
-
-  bool operator==(const DerivePolicyInput& other) const {
-    return ToTuple() == other.ToTuple();
-  }
-
-  // Allows using inputs as keys of a map.
-  bool operator<(const DerivePolicyInput& other) const {
-    return ToTuple() < other.ToTuple();
-  }
+  RequestContext request_context;
 };
+
+std::string_view RequestContextToStringPiece(RequestContext request_context) {
+  switch (request_context) {
+    case RequestContext::kSubresource:
+      return "subresource";
+    case RequestContext::kWorker:
+      return "worker";
+    case RequestContext::kMainFrameNavigation:
+      return "main-frame-navigation";
+    case RequestContext::kSubframeNavigation:
+      return "subframe-navigation";
+    case RequestContext::kFencedFrameNavigation:
+      return "fenced-frame-navigation";
+  }
+}
 
 // For ease of debugging.
 std::ostream& operator<<(std::ostream& out, const DerivePolicyInput& input) {
   return out << "{ " << input.address_space << ", "
              << (input.is_web_secure_context ? "secure" : "non-secure") << ", "
-             << (input.private_network_request_context ==
-                         PrivateNetworkRequestContext::kWorker
-                     ? "worker"
-                     : "subresource")
+             << (input.allow_on_non_secure_context ? "allow-non-secure"
+                                                   : "disallow-non-secure")
+             << ", " << RequestContextToStringPiece(input.request_context)
              << " }";
 }
 
 Policy DerivePolicy(DerivePolicyInput input) {
   return DerivePrivateNetworkRequestPolicy(
       input.address_space, input.is_web_secure_context,
-      input.private_network_request_context);
+      input.allow_on_non_secure_context, input.request_context);
 }
 
 // Maps inputs to their default output (all feature flags left untouched).
-std::map<DerivePolicyInput, Policy> DefaultPolicyMap() {
+// NOTE: This is a vector of pairs so that iteration occurs in the same order
+// as construction to allow easier maintenance (and we only ever iterate through
+// all entries in the tests.)
+std::vector<std::pair<DerivePolicyInput, Policy>> DefaultPolicyMap() {
   return {
-      {{kNonSecure, AddressSpace::kUnknown,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kAllow},
-      {{kNonSecure, AddressSpace::kPublic,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kBlock},
-      {{kNonSecure, AddressSpace::kPrivate,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kWarn},
-      {{kNonSecure, AddressSpace::kLocal,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kBlock},
-      {{kSecure, AddressSpace::kUnknown,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kAllow},
-      {{kSecure, AddressSpace::kPublic,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kPreflightWarn},
-      {{kSecure, AddressSpace::kPrivate,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kPreflightWarn},
-      {{kSecure, AddressSpace::kLocal,
-        PrivateNetworkRequestContext::kSubresource},
-       Policy::kPreflightWarn},
-      {{kNonSecure, AddressSpace::kUnknown,
-        PrivateNetworkRequestContext::kWorker},
-       Policy::kAllow},
-      {{kNonSecure, AddressSpace::kPublic,
-        PrivateNetworkRequestContext::kWorker},
-       Policy::kWarn},
-      {{kNonSecure, AddressSpace::kPrivate,
-        PrivateNetworkRequestContext::kWorker},
-       Policy::kWarn},
-      {{kNonSecure, AddressSpace::kLocal,
-        PrivateNetworkRequestContext::kWorker},
-       Policy::kWarn},
-      {{kSecure, AddressSpace::kUnknown, PrivateNetworkRequestContext::kWorker},
-       Policy::kAllow},
-      {{kSecure, AddressSpace::kPublic, PrivateNetworkRequestContext::kWorker},
-       Policy::kPreflightWarn},
-      {{kSecure, AddressSpace::kPrivate, PrivateNetworkRequestContext::kWorker},
-       Policy::kPreflightWarn},
-      {{kSecure, AddressSpace::kLocal, PrivateNetworkRequestContext::kWorker},
-       Policy::kPreflightWarn},
+      //
+      // `RequestContext::kSubresource`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubresource},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubresource},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubresource},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubresource},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubresource},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubresource},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubresource},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubresource},
+          Policy::kWarn,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubresource},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubresource},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubresource},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubresource},
+          Policy::kAllow,
+      },
+      //
+      // `RequestContext::kWorker`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kWorker},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kWorker},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kWorker},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kWorker},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kWorker},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kWorker},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kWorker},
+          Policy::kWarn,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kWorker},
+          Policy::kWarn,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kWorker},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kWorker},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kWorker},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kWorker},
+          Policy::kAllow,
+      },
+      //
+      // `RequestContext::kMainFrameNavigation`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
   };
 }
 
-// Runs `DerivePolicy()` on each key and compares the result to the map value.
-void TestPolicyMap(const std::map<DerivePolicyInput, Policy>& expected) {
+// Maps inputs to their output when LocalNetworkAccessChecks is enabled.
+std::vector<std::pair<DerivePolicyInput, Policy>> LNAPolicyMap() {
+  return {
+      //
+      // `RequestContext::kSubresource`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubresource},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubresource},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubresource},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubresource},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubresource},
+          Policy::kPermissionBlock,
+      },
+      //
+      // `RequestContext::kWorker`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kWorker},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kWorker},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kWorker},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kWorker},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kWorker},
+          Policy::kPermissionBlock,
+      },
+      //
+      // `RequestContext::kMainFrameNavigation`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kMainFrameNavigation},
+          Policy::kAllow,
+      },
+      //
+      // `RequestContext::kSubframeNavigation`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubframeNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubframeNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubframeNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubframeNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kSubframeNavigation},
+          Policy::kPermissionBlock,
+      },
+      //
+      // `RequestContext::kFencedFrameNavigation`
+      //
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kPublic,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLocal,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kNonSecure, kAllowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kUnknown,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kPublic,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLocal,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+      {
+          {kSecure, kDisallowNonSecure, AddressSpace::kLoopback,
+           RequestContext::kFencedFrameNavigation},
+          Policy::kPermissionBlock,
+      },
+  };
+}
+
+std::vector<std::pair<DerivePolicyInput, Policy>> AllAllowMap() {
+  std::vector<std::pair<DerivePolicyInput, Policy>> result = DefaultPolicyMap();
+  for (auto& entry : result) {
+    entry.second = Policy::kAllow;
+  }
+  return result;
+}
+
+// Runs `DerivePolicy()` on each DerivePolicyInput and compares the result to
+// the expected value.
+void TestPolicyMap(
+    const std::vector<std::pair<DerivePolicyInput, Policy>>& expected) {
   for (const auto& [input, policy] : expected) {
     EXPECT_EQ(DerivePolicy(input), policy) << input;
   }
 }
 
-TEST(PrivateNetworkAccessUtilTest, DerivePolicy) {
+TEST(PrivateNetworkAccessUtilTest, DerivePolicyLocalNetworkAccessDiabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      network::features::kLocalNetworkAccessChecks);
   TestPolicyMap(DefaultPolicyMap());
-}
-
-TEST(PrivateNetworkAccessUtilTest, DerivePolicyBlockFromInsecurePrivate) {
-  base::test::ScopedFeatureList feature_list(
-      features::kBlockInsecurePrivateNetworkRequestsFromPrivate);
-
-  std::map<DerivePolicyInput, Policy> expected = DefaultPolicyMap();
-  // Only need to override non-worker case because workers are by default
-  // warnings only.
-  expected[{kNonSecure, AddressSpace::kPrivate,
-            PrivateNetworkRequestContext::kSubresource}] = Policy::kBlock;
-
-  TestPolicyMap(expected);
-}
-
-TEST(PrivateNetworkAccessUtilTest, DerivePolicyBlockFromInsecureUnknown) {
-  base::test::ScopedFeatureList feature_list(
-      features::kBlockInsecurePrivateNetworkRequestsFromUnknown);
-
-  std::map<DerivePolicyInput, Policy> expected = DefaultPolicyMap();
-  expected[{kNonSecure, AddressSpace::kUnknown,
-            PrivateNetworkRequestContext::kSubresource}] = Policy::kBlock;
-  expected[{kNonSecure, AddressSpace::kUnknown,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kBlock;
-
-  TestPolicyMap(expected);
-}
-
-TEST(PrivateNetworkAccessUtilTest, DerivePolicyNoPreflights) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {}, {features::kPrivateNetworkAccessSendPreflights});
-
-  std::map<DerivePolicyInput, Policy> expected = DefaultPolicyMap();
-  expected[{kSecure, AddressSpace::kPublic,
-            PrivateNetworkRequestContext::kSubresource}] = Policy::kAllow;
-  expected[{kSecure, AddressSpace::kPrivate,
-            PrivateNetworkRequestContext::kSubresource}] = Policy::kAllow;
-  expected[{kSecure, AddressSpace::kLocal,
-            PrivateNetworkRequestContext::kSubresource}] = Policy::kAllow;
-  expected[{kSecure, AddressSpace::kPublic,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kAllow;
-  expected[{kSecure, AddressSpace::kPrivate,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kAllow;
-  expected[{kSecure, AddressSpace::kLocal,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kAllow;
-
-  TestPolicyMap(expected);
-}
-
-TEST(PrivateNetworkAccessUtilTest, DerivePolicyRespectPreflightResults) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {features::kPrivateNetworkAccessRespectPreflightResults},
-      {features::kPrivateNetworkAccessForWorkersWarningOnly});
-
-  std::map<DerivePolicyInput, Policy> expected = DefaultPolicyMap();
-  expected[{kSecure, AddressSpace::kPublic,
-            PrivateNetworkRequestContext::kSubresource}] =
-      Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kPrivate,
-            PrivateNetworkRequestContext::kSubresource}] =
-      Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kLocal,
-            PrivateNetworkRequestContext::kSubresource}] =
-      Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kPublic,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kPrivate,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kLocal,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kPreflightBlock;
-
-  // Overriding these because we've disabled warnings only.
-  expected[{kNonSecure, AddressSpace::kPublic,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kBlock;
-  expected[{kNonSecure, AddressSpace::kLocal,
-            PrivateNetworkRequestContext::kWorker}] = Policy::kBlock;
-
-  TestPolicyMap(expected);
-}
-
-TEST(PrivateNetworkAccessUtilTest, DerivePolicyWarningOnlyForWorkers) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {features::kPrivateNetworkAccessForWorkersWarningOnly,
-       features::kPrivateNetworkAccessRespectPreflightResults},
-      {});
-
-  std::map<DerivePolicyInput, Policy> expected = DefaultPolicyMap();
-  // Only need to override non-worker case because workers are by default
-  // warnings only.
-  expected[{kSecure, AddressSpace::kPublic,
-            PrivateNetworkRequestContext::kSubresource}] =
-      Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kPrivate,
-            PrivateNetworkRequestContext::kSubresource}] =
-      Policy::kPreflightBlock;
-  expected[{kSecure, AddressSpace::kLocal,
-            PrivateNetworkRequestContext::kSubresource}] =
-      Policy::kPreflightBlock;
-
-  TestPolicyMap(expected);
 }
 
 TEST(PrivateNetworkAccessUtilTest, DerivePolicyDisableWebSecurity) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kDisableWebSecurity);
 
-  for (const auto& [input, policy] : DefaultPolicyMap()) {
-    // Ignore the value, we only use the map as a list of keys.
-    EXPECT_EQ(DerivePolicy(input), Policy::kAllow) << input;
+  TestPolicyMap(AllAllowMap());
+}
+
+// Test the configuration in LNA blocking mode.
+TEST(PrivateNetworkAccessUtilTest, DerivePolicyLocalNetworkAccess) {
+  base::test::ScopedFeatureList feature_list;
+  base::FieldTrialParams params;
+  params["LocalNetworkAccessChecksWarn"] = "false";
+  feature_list.InitAndEnableFeatureWithParameters(
+      network::features::kLocalNetworkAccessChecks, params);
+
+  std::vector<std::pair<DerivePolicyInput, Policy>> expected = LNAPolicyMap();
+  TestPolicyMap(expected);
+}
+
+// Test the configuration in LNA warning-only mode.
+TEST(PrivateNetworkAccessUtilTest, DerivePolicyLocalNetworkAccessWarn) {
+  base::test::ScopedFeatureList feature_list;
+  base::FieldTrialParams params;
+  params["LocalNetworkAccessChecksWarn"] = "true";
+  feature_list.InitAndEnableFeatureWithParameters(
+      network::features::kLocalNetworkAccessChecks, params);
+
+  // Warning-only LNA should just be the LNA policy map but k*Block
+  // is downgraded to kPermissionWarn.
+  std::vector<std::pair<DerivePolicyInput, Policy>> expected = LNAPolicyMap();
+  for (auto& entry : expected) {
+    if (entry.second == Policy::kPermissionBlock) {
+      entry.second = Policy::kPermissionWarn;
+    } else if (entry.second == Policy::kBlock) {
+      entry.second = Policy::kPermissionWarn;
+    }
   }
+  TestPolicyMap(expected);
 }
 
 }  // namespace

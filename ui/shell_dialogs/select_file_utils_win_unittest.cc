@@ -38,10 +38,10 @@ TEST(SelectFileUtilsWin, RemoveEnvVarFromFileName) {
       {L"%ab%c%.%txt%", L"ctxt%"},
   };
 
-  for (size_t i = 0; i < std::size(test_cases); ++i) {
-    SCOPED_TRACE(base::StringPrintf("i=%zu", i));
+  for (size_t i = 0; const auto& test_case : test_cases) {
+    SCOPED_TRACE(base::StringPrintf("i=%zu", i++));
     std::wstring sanitized = ui::RemoveEnvVarFromFileName<wchar_t>(
-        std::wstring(test_cases[i].filename), std::wstring(L"%"));
-    EXPECT_EQ(std::wstring(test_cases[i].sanitized_filename), sanitized);
+        std::wstring(test_case.filename), std::wstring(L"%"));
+    EXPECT_EQ(std::wstring(test_case.sanitized_filename), sanitized);
   }
 }

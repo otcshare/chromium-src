@@ -8,6 +8,7 @@
 #include "base/check_op.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/resolver/cascade_origin.h"
+#include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 
 namespace blink {
 
@@ -18,17 +19,23 @@ namespace blink {
 //
 // [1] https://www.w3.org/TR/css-cascade-3/#cascade-origin
 inline uint32_t EncodeOriginImportance(CascadeOrigin origin, bool important) {
-  uint8_t important_xor = (static_cast<uint8_t>(!important) - 1) & 0xF;
-  return static_cast<uint32_t>(origin) ^ important_xor;
+  if (important) {
+    return static_cast<uint32_t>(origin) ^ 0xF;
+  } else {
+    return static_cast<uint32_t>(origin);
+  }
 }
 
 // Tree order bits are flipped for important declarations to reverse the
 // priority [1].
 //
-// [1] https://drafts.csswg.org/css-scoping/#shadow-cascading
+// [1] https://drafts.csswg.org/css-shadow/#shadow-cascading
 inline uint32_t EncodeTreeOrder(uint16_t tree_order, bool important) {
-  uint16_t important_xor = static_cast<uint16_t>(!important) - 1;
-  return static_cast<uint32_t>(tree_order) ^ important_xor;
+  if (important) {
+    return tree_order ^ 0xFFFF;
+  } else {
+    return tree_order;
+  }
 }
 
 // Layer order bits are flipped for important declarations to reverse the
@@ -36,8 +43,24 @@ inline uint32_t EncodeTreeOrder(uint16_t tree_order, bool important) {
 //
 // [1] https://drafts.csswg.org/css-cascade-5/#cascade-layering
 inline uint64_t EncodeLayerOrder(uint16_t layer_order, bool important) {
-  uint16_t important_xor = static_cast<uint16_t>(!important) - 1;
-  return static_cast<uint64_t>(layer_order) ^ important_xor;
+  if (important) {
+    return layer_order ^ 0xFFFF;
+  } else {
+    return layer_order;
+  }
+}
+
+inline uint32_t EncodeMatchResultPosition(uint16_t block,
+                                          uint16_t declaration) {
+  return (static_cast<uint32_t>(block) << 16) | declaration;
+}
+
+inline wtf_size_t DecodeMatchedPropertiesIndex(uint32_t position) {
+  return (position >> 16) & 0xFFFF;
+}
+
+inline wtf_size_t DecodeDeclarationIndex(uint32_t position) {
+  return position & 0xFFFF;
 }
 
 // The CascadePriority class encapsulates a subset of the cascading criteria
@@ -55,7 +78,7 @@ inline uint64_t EncodeLayerOrder(uint16_t layer_order, bool important) {
 // StyleCascade for each call to StyleCascade::Apply.
 //
 // [1] https://drafts.csswg.org/css-cascade/#cascading
-// [2] https://drafts.csswg.org/css-scoping/#shadow-cascading
+// [2] https://drafts.csswg.org/css-shadow/#shadow-cascading
 // [3] https://drafts.csswg.org/css-cascade/#style-attr
 // [4] https://drafts.csswg.org/css-cascade-5/#layer-ordering
 class CORE_EXPORT CascadePriority {
@@ -63,7 +86,9 @@ class CORE_EXPORT CascadePriority {
   // The declaration is important if this bit is set on the encoded priority.
   static constexpr uint64_t kImportantBit = 19;            // of high_bits_
   static constexpr uint64_t kOriginImportanceOffset = 16;  // of high_bits_
-  static constexpr uint64_t kIsInlineStyleOffset = 52;     // of low_bits
+  static constexpr uint64_t kIsTryTacticsStyleOffset = 54;  // of low_bits_
+  static constexpr uint64_t kIsTryStyleOffset = 53;         // of low_bits_
+  static constexpr uint64_t kIsInlineStyleOffset = 52;     // of low_bits_
   static constexpr uint64_t kLayerOrderOffset = 36;        // of low_bits_
   static constexpr uint64_t kPositionOffset = 4;           // of low_bits_
 
@@ -77,25 +102,51 @@ class CORE_EXPORT CascadePriority {
   static constexpr uint64_t kGenerationMask = 0xF;               // of low_bits_
 
   CascadePriority() : low_bits_(0), high_bits_(0) {}
-  CascadePriority(CascadeOrigin origin)
-      : CascadePriority(origin, false, 0, false, 0, 0) {}
+  explicit CascadePriority(CascadeOrigin origin)
+      : CascadePriority(origin,
+                        /* important */ false,
+                        /* tree_order */ 0,
+                        /* is_inline_style */ false,
+                        /* is_try_style */ false,
+                        /* is_try_tactics_style */ false,
+                        /* layer_order */ 0,
+                        /* position */ 0) {}
   CascadePriority(CascadeOrigin origin, bool important)
-      : CascadePriority(origin, important, 0, false, 0, 0) {}
+      : CascadePriority(origin,
+                        important,
+                        /* tree_order */ 0,
+                        /* is_inline_style */ false,
+                        /* is_try_style */ false,
+                        /* is_try_tactics_style */ false,
+                        /* layer_order */ 0,
+                        /* position */ 0) {}
   CascadePriority(CascadeOrigin origin, bool important, uint16_t tree_order)
-      : CascadePriority(origin, important, tree_order, false, 0, 0) {}
+      : CascadePriority(origin,
+                        important,
+                        tree_order,
+                        /* is_inline_style */ false,
+                        /* is_try_style */ false,
+                        /* is_try_tactics_style */ false,
+                        /* layer_order */ 0,
+                        /* position */ 0) {}
 
-  // For an explanation of 'tree_order', see css-scoping:
-  // https://drafts.csswg.org/css-scoping/#shadow-cascading
+  // For an explanation of 'tree_order', see css-shadow:
+  // https://drafts.csswg.org/css-shadow/#shadow-cascading
   CascadePriority(CascadeOrigin origin,
                   bool important,
                   uint16_t tree_order,
                   bool is_inline_style,
+                  bool is_try_style,
+                  bool is_try_tactics_style,
                   uint16_t layer_order,
                   uint32_t position)
       : CascadePriority(
             static_cast<uint64_t>(position) << kPositionOffset |
                 EncodeLayerOrder(layer_order, important) << kLayerOrderOffset |
-                static_cast<uint64_t>(is_inline_style) << kIsInlineStyleOffset,
+                static_cast<uint64_t>(is_inline_style) << kIsInlineStyleOffset |
+                static_cast<uint64_t>(is_try_style) << kIsTryStyleOffset |
+                static_cast<uint64_t>(is_try_tactics_style)
+                    << kIsTryTacticsStyleOffset,
             EncodeTreeOrder(tree_order, important) |
                 EncodeOriginImportance(origin, important)
                     << kOriginImportanceOffset) {}
@@ -114,11 +165,21 @@ class CORE_EXPORT CascadePriority {
                                       kOriginImportanceOffset);
   }
   bool HasOrigin() const { return GetOrigin() != CascadeOrigin::kNone; }
+  // The position consists of two 16-bit parts: the high part is the
+  // "rule index", i.e. the index of a MatchedProperties object within
+  // a MatchResult; the low part is the "declaration index", i.e. the index
+  // of this declaration within its rule.
   uint32_t GetPosition() const {
     return (low_bits_ & kPositionMask) >> kPositionOffset;
   }
+  wtf_size_t GetRuleIndex() const {
+    return DecodeMatchedPropertiesIndex(GetPosition());
+  }
   uint8_t GetGeneration() const { return low_bits_ & kGenerationMask; }
   bool IsInlineStyle() const { return (low_bits_ >> kIsInlineStyleOffset) & 1; }
+
+  // https://drafts.csswg.org/css-anchor-position-1/#fallback-rule
+  bool IsTryStyle() const { return (low_bits_ >> kIsTryStyleOffset) & 1; }
 
   // Returns a value that compares like CascadePriority, except that it
   // ignores the importance and all sorting criteria below layer order,
@@ -158,9 +219,6 @@ class CORE_EXPORT CascadePriority {
   bool operator==(const CascadePriority& o) const {
     return high_bits_ == o.high_bits_ && low_bits_ == o.low_bits_;
   }
-  bool operator!=(const CascadePriority& o) const {
-    return high_bits_ != o.high_bits_ || low_bits_ != o.low_bits_;
-  }
 
  private:
   friend class StyleCascade;
@@ -173,6 +231,8 @@ class CORE_EXPORT CascadePriority {
   //  Bit  4-35: position
   //  Bit 36-51: layer_order (encoded)
   //  Bit    52: is_inline_style
+  //  Bit    53: is_try_style
+  //  Bit    54: is_try_tactics_style
   uint64_t low_bits_;
 
   //  Bit  0-15: tree_order (encoded)

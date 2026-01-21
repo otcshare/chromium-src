@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/strings/string_piece.h"
 #include "base/win/reference.h"
 #include "base/win/scoped_hstring.h"
 #include "base/win/vector.h"
@@ -99,7 +98,7 @@ std::vector<ComPtr<IBluetoothLEAdvertisementDataSection>> ToDataSections(
 
     // Reverse the data as UUIDs are specified in little endian order in the
     // advertisement payload.
-    std::reverse(data.begin(), data.end());
+    std::ranges::reverse(data);
 
     // Append the actual service data and append a new data section.
     data.insert(data.end(), pair.second.begin(), pair.second.end());
@@ -116,10 +115,10 @@ FakeBluetoothLEAdvertisementWinrt::FakeBluetoothLEAdvertisementWinrt() =
     default;
 
 FakeBluetoothLEAdvertisementWinrt::FakeBluetoothLEAdvertisementWinrt(
-    absl::optional<std::string> local_name,
-    absl::optional<uint8_t> flags,
+    std::optional<std::string> local_name,
+    std::optional<uint8_t> flags,
     BluetoothDevice::UUIDList advertised_uuids,
-    absl::optional<int8_t> tx_power,
+    std::optional<int8_t> tx_power,
     BluetoothDevice::ServiceDataMap service_data,
     BluetoothDevice::ManufacturerDataMap manufacturer_data)
     : local_name_(std::move(local_name)),

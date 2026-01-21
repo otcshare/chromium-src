@@ -4,36 +4,32 @@
 
 #import "ios/chrome/app/startup/register_experimental_settings.h"
 
-#import <ostream>
-
+#import "base/apple/bundle_locations.h"
 #import "base/check.h"
-#import "base/mac/bundle_locations.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
-
 namespace {
 // Key in the UserDefaults for the Experimental Keys.
-NSString* kExperimentalKeysKey = @"ExperimentalKeys";
+NSString* const kExperimentalKeysKey = @"ExperimentalKeys";
 
 // Returns YES if a setting value is equivalent to not having the setting at
 // all. This must always be true for default values, otherwise the experimental
 // settings will have different default behaviors in stable channel (where the
 // bundle isn't present).
 BOOL IsDefaultSettingValueValid(id value) {
-  if (!value)
+  if (!value) {
     return YES;
-  if ([value isKindOfClass:[NSNumber class]])
+  }
+  if ([value isKindOfClass:[NSNumber class]]) {
     return [value intValue] == 0;
-  if ([value isKindOfClass:[NSString class]])
+  }
+  if ([value isKindOfClass:[NSString class]]) {
     return [value length] == 0;
+  }
   // Add support for other types as necessary.
   NOTREACHED() << "Unhandled value type "
                << base::SysNSStringToUTF8(NSStringFromClass([value class]));
-  return NO;
 }
 }  // namespace
 
@@ -105,8 +101,9 @@ BOOL IsDefaultSettingValueValid(id value) {
   // Scan through all the preferences in the plist file.
   for (NSDictionary* preferenceSpecifier in preferencesArray) {
     NSString* keyValue = [preferenceSpecifier objectForKey:@"Key"];
-    if (!keyValue)
+    if (!keyValue) {
       continue;
+    }
 
     id defaultValue = [preferenceSpecifier objectForKey:@"DefaultValue"];
     // Within the app, the default for all experimental prefs is nil (matching

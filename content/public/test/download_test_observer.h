@@ -11,8 +11,9 @@
 #include <set>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
@@ -51,6 +52,7 @@ class DownloadUpdatedObserver : public download::DownloadItem::Observer {
   EventFilter filter_;
   bool waiting_;
   bool event_seen_;
+  base::RunLoop loop_;
 };
 
 // Detects changes to the downloads after construction.
@@ -112,7 +114,8 @@ class DownloadTestObserver : public DownloadManager::Observer,
   virtual bool IsDownloadInFinalState(download::DownloadItem* download) = 0;
 
  private:
-  typedef std::set<download::DownloadItem*> DownloadSet;
+  typedef std::set<raw_ptr<download::DownloadItem, SetExperimental>>
+      DownloadSet;
 
   // Maps states to the number of times they have been encountered
   typedef std::map<download::DownloadItem::DownloadState, size_t> StateMap;
@@ -171,6 +174,8 @@ class DownloadTestObserver : public DownloadManager::Observer,
 
   // Holds the download ids which were dangerous.
   std::set<uint32_t> dangerous_downloads_seen_;
+
+  base::RunLoop loop_{base::RunLoop::Type::kNestableTasksAllowed};
 
   base::WeakPtrFactory<DownloadTestObserver> weak_factory_{this};
 };
@@ -268,7 +273,8 @@ class DownloadTestFlushObserver : public DownloadManager::Observer,
   void OnDownloadDestroyed(download::DownloadItem* download) override;
 
  private:
-  typedef std::set<download::DownloadItem*> DownloadSet;
+  typedef std::set<raw_ptr<download::DownloadItem, SetExperimental>>
+      DownloadSet;
 
   // If we're waiting for that flush point, check the number
   // of downloads in the IN_PROGRESS state and take appropriate
@@ -325,6 +331,8 @@ class DownloadTestItemCreationObserver
 
   // We are in the message loop.
   bool waiting_;
+
+  base::RunLoop loop_;
 };
 
 // Class for mornitoring whether a save package download finishes.

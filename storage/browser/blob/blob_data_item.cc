@@ -4,12 +4,15 @@
 
 #include "storage/browser/blob/blob_data_item.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "components/file_access/scoped_file_access_delegate.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/data_pipe_to_source_stream.h"
@@ -80,22 +83,20 @@ scoped_refptr<BlobDataItem> BlobDataItem::CreateBytesDescription(
 }
 
 // static
-scoped_refptr<BlobDataItem> BlobDataItem::CreateFile(base::FilePath path) {
-  return CreateFile(path, 0, blink::BlobUtils::kUnknownSize);
-}
-
-// static
 scoped_refptr<BlobDataItem> BlobDataItem::CreateFile(
     base::FilePath path,
     uint64_t offset,
     uint64_t length,
     base::Time expected_modification_time,
-    scoped_refptr<ShareableFileReference> file_ref) {
+    scoped_refptr<ShareableFileReference> file_ref,
+    file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+        file_access) {
   auto item =
       base::WrapRefCounted(new BlobDataItem(Type::kFile, offset, length));
   item->path_ = std::move(path);
   item->expected_modification_time_ = std::move(expected_modification_time);
   item->file_ref_ = std::move(file_ref);
+  item->file_access_ = std::move(file_access);
   // TODO(mek): DCHECK(!item->IsFutureFileItem()) when BlobDataBuilder has some
   // other way of slicing a future file.
   return item;
@@ -120,12 +121,15 @@ scoped_refptr<BlobDataItem> BlobDataItem::CreateFileFilesystem(
     uint64_t offset,
     uint64_t length,
     base::Time expected_modification_time,
-    scoped_refptr<FileSystemContext> file_system_context) {
+    scoped_refptr<FileSystemContext> file_system_context,
+    file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+        file_access) {
   auto item = base::WrapRefCounted(
       new BlobDataItem(Type::kFileFilesystem, offset, length));
   item->filesystem_url_ = url;
   item->expected_modification_time_ = std::move(expected_modification_time);
   item->file_system_context_ = std::move(file_system_context);
+  item->file_access_ = std::move(file_access);
   return item;
 }
 
@@ -270,7 +274,7 @@ bool operator==(const BlobDataItem& a, const BlobDataItem& b) {
     return false;
   switch (a.type()) {
     case BlobDataItem::Type::kBytes:
-      return base::ranges::equal(a.bytes(), b.bytes());
+      return std::ranges::equal(a.bytes(), b.bytes());
     case BlobDataItem::Type::kBytesDescription:
       return true;
     case BlobDataItem::Type::kFile:
@@ -282,7 +286,6 @@ bool operator==(const BlobDataItem& a, const BlobDataItem& b) {
       return a.data_handle() == b.data_handle();
   }
   NOTREACHED();
-  return false;
 }
 
 bool operator!=(const BlobDataItem& a, const BlobDataItem& b) {

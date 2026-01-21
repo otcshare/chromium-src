@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "net/socket/transport_connect_job.h"
 
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -12,22 +14,26 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "net/base/address_family.h"
-#include "net/base/address_list.h"
 #include "net/base/features.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
-#include "net/base/test_completion_callback.h"
+#include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/http/transport_security_state.h"
 #include "net/log/net_log.h"
 #include "net/socket/connect_job_test_util.h"
 #include "net/socket/connection_attempts.h"
+#include "net/socket/ssl_client_socket.h"
 #include "net/socket/stream_socket.h"
 #include "net/socket/transport_client_socket_pool_test_util.h"
+#include "net/ssl/ssl_config_service.h"
+#include "net/ssl/test_ssl_config_service.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_with_task_environment.h"
+#include "net/url_request/static_http_user_agent_settings.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/scheme_host_port.h"
 #include "url/url_constants.h"
@@ -52,18 +58,23 @@ class TransportConnectJobTest : public WithTaskEnvironment,
         common_connect_job_params_(
             &client_socket_factory_,
             &host_resolver_,
-            nullptr /* http_auth_cache */,
-            nullptr /* http_auth_handler_factory */,
-            nullptr /* spdy_session_pool */,
-            nullptr /* quic_supported_versions */,
-            nullptr /* quic_stream_factory */,
-            nullptr /* proxy_delegate */,
-            nullptr /* http_user_agent_settings */,
-            nullptr /* ssl_client_context */,
-            nullptr /* socket_performance_watcher_factory */,
-            nullptr /* network_quality_estimator */,
+            /*http_auth_cache=*/nullptr,
+            /*http_auth_handler_factory=*/nullptr,
+            /*spdy_session_pool=*/nullptr,
+            /*quic_supported_versions=*/nullptr,
+            /*quic_session_pool=*/nullptr,
+            /*proxy_delegate=*/nullptr,
+            &http_user_agent_settings_,
+            &ssl_client_context_,
+            /*socket_performance_watcher_factory=*/nullptr,
+            /*network_quality_estimator=*/nullptr,
             NetLog::Get(),
-            nullptr /* websocket_endpoint_lock_manager */) {}
+            /*websocket_endpoint_lock_manager=*/nullptr,
+            /*http_server_properties=*/nullptr,
+            /*alpn_protos=*/nullptr,
+            /*application_settings=*/nullptr,
+            /*ignore_certificate_errors=*/nullptr,
+            /*early_data_enabled=*/nullptr) {}
 
   ~TransportConnectJobTest() override = default;
 
@@ -87,6 +98,15 @@ class TransportConnectJobTest : public WithTaskEnvironment,
   MockHostResolver host_resolver_{/*default_result=*/MockHostResolverBase::
                                       RuleResolver::GetLocalhostResult()};
   MockTransportClientSocketFactory client_socket_factory_;
+  TestSSLConfigService ssl_config_service_{SSLContextConfig{}};
+  MockCertVerifier cert_verifier_;
+  TransportSecurityState transport_security_state_;
+  const StaticHttpUserAgentSettings http_user_agent_settings_ = {"*",
+                                                                 "test-ua"};
+  SSLClientContext ssl_client_context_{&ssl_config_service_, &cert_verifier_,
+                                       &transport_security_state_,
+                                       /*ssl_client_session_cache=*/nullptr,
+                                       /*sct_auditing_delegate=*/nullptr};
   const CommonConnectJobParams common_connect_job_params_;
 };
 
@@ -178,8 +198,9 @@ TEST_F(TransportConnectJobTest, ConnectionTimeout) {
     EXPECT_FALSE(test_delegate.has_result());
 
     // In the async case, the host resolution completes now.
-    if (!host_resolution_synchronous)
+    if (!host_resolution_synchronous) {
       host_resolver_.ResolveOnlyRequestNow();
+    }
 
     // After (almost) the second half of timeout, just before the full timeout
     // period, the ConnectJob is still live.
@@ -240,7 +261,7 @@ TEST_F(TransportConnectJobTest, LoadState) {
   EXPECT_EQ(transport_connect_job.GetLoadState(), LOAD_STATE_CONNECTING);
 }
 
-// TODO(crbug.com/1206799): Set up `host_resolver_` to require the expected
+// TODO(crbug.com/40181080): Set up `host_resolver_` to require the expected
 // scheme.
 TEST_F(TransportConnectJobTest, HandlesHttpsEndpoint) {
   TestConnectJobDelegate test_delegate;
@@ -256,7 +277,7 @@ TEST_F(TransportConnectJobTest, HandlesHttpsEndpoint) {
                                         false /* expect_sync_result */);
 }
 
-// TODO(crbug.com/1206799): Set up `host_resolver_` to require the expected
+// TODO(crbug.com/40181080): Set up `host_resolver_` to require the expected
 // lack of scheme.
 TEST_F(TransportConnectJobTest, HandlesNonStandardEndpoint) {
   TestConnectJobDelegate test_delegate;
@@ -487,7 +508,7 @@ TEST_F(TransportConnectJobTest, EndpointResult) {
   MockTransportClientSocketFactory::Rule rule(
       MockTransportClientSocketFactory::Type::kSynchronous,
       std::vector{IPEndPoint(ParseIP("1::"), 8443)});
-  client_socket_factory_.SetRules(base::make_span(&rule, 1));
+  client_socket_factory_.SetRules(base::span_from_ref(rule));
 
   TestConnectJobDelegate test_delegate;
   TransportConnectJob transport_connect_job(
@@ -642,7 +663,7 @@ TEST_F(TransportConnectJobTest, MultipleRoutesSuspended) {
   MockTransportClientSocketFactory::Rule rule(
       MockTransportClientSocketFactory::Type::kFailing,
       endpoints[0].ip_endpoints, ERR_NETWORK_IO_SUSPENDED);
-  client_socket_factory_.SetRules(base::make_span(&rule, 1));
+  client_socket_factory_.SetRules(base::span_from_ref(rule));
 
   TestConnectJobDelegate test_delegate;
   TransportConnectJob transport_connect_job(
@@ -679,7 +700,7 @@ TEST_F(TransportConnectJobTest, NoAlpnProtocols) {
   MockTransportClientSocketFactory::Rule rule(
       MockTransportClientSocketFactory::Type::kSynchronous,
       std::vector{endpoints[2].ip_endpoints[0]});
-  client_socket_factory_.SetRules(base::make_span(&rule, 1));
+  client_socket_factory_.SetRules(base::span_from_ref(rule));
 
   // Use `DefaultParams()`, an http scheme. That it is http is not very
   // important, but `url::SchemeHostPort` is difficult to use with unknown
@@ -872,9 +893,6 @@ TEST_F(TransportConnectJobTest, GetHostResolverEndpointResult) {
 // If the client and server both support ECH, TransportConnectJob should switch
 // to SVCB-reliant mode and disable the A/AAAA fallback.
 TEST_F(TransportConnectJobTest, SvcbReliantIfEch) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kEncryptedClientHello);
-
   HostResolverEndpointResult endpoint1, endpoint2, endpoint3;
   endpoint1.ip_endpoints = {IPEndPoint(ParseIP("1::"), 8441)};
   endpoint1.metadata.supported_protocol_alpns = {"http/1.1"};
@@ -915,10 +933,12 @@ TEST_F(TransportConnectJobTest, SvcbReliantIfEch) {
   EXPECT_EQ(attempts[1].endpoint, IPEndPoint(ParseIP("2::"), 8442));
 }
 
-// SVCB-reliant mode should be disabled for ECH servers when ECH is disabled.
-TEST_F(TransportConnectJobTest, SvcbOptionalIfEchDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kEncryptedClientHello);
+// SVCB-reliant mode should be disabled for ECH servers when ECH is disabled via
+// config.
+TEST_F(TransportConnectJobTest, SvcbOptionalIfEchDisabledConfig) {
+  SSLContextConfig config;
+  config.ech_enabled = false;
+  ssl_config_service_.UpdateSSLConfigAndNotify(config);
 
   HostResolverEndpointResult endpoint1, endpoint2, endpoint3;
   endpoint1.ip_endpoints = {IPEndPoint(ParseIP("1::"), 8441)};
@@ -958,9 +978,6 @@ TEST_F(TransportConnectJobTest, SvcbOptionalIfEchDisabled) {
 // SVCB-reliant mode should be disabled if not all SVCB/HTTPS records include
 // ECH.
 TEST_F(TransportConnectJobTest, SvcbOptionalIfEchInconsistent) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kEncryptedClientHello);
-
   HostResolverEndpointResult endpoint1, endpoint2, endpoint3;
   endpoint1.ip_endpoints = {IPEndPoint(ParseIP("1::"), 8441)};
   endpoint1.metadata.supported_protocol_alpns = {"http/1.1"};

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/permissions/quiet_permission_prompt_model_android.h"
 
+#include "base/notreached.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -14,6 +15,35 @@ using PrimaryButtonBehavior =
     QuietPermissionPromptModelAndroid::PrimaryButtonBehavior;
 using SecondaryButtonBehavior =
     QuietPermissionPromptModelAndroid::SecondaryButtonBehavior;
+
+std::u16string GetPermissionBlockedTitle(
+    ContentSettingsType content_settings_type) {
+  switch (content_settings_type) {
+    case ContentSettingsType::NOTIFICATIONS:
+      return l10n_util::GetStringUTF16(
+          IDS_NOTIFICATION_QUIET_PERMISSION_INFOBAR_TITLE);
+    case ContentSettingsType::GEOLOCATION:
+    case ContentSettingsType::GEOLOCATION_WITH_OPTIONS:
+      return l10n_util::GetStringUTF16(
+          IDS_LOCATION_QUIET_PERMISSION_MESSAGE_UI_TITLE);
+    default:
+      NOTREACHED();
+  }
+}
+
+std::u16string GetGeolocationBlockedUIDescription(QuietUiReason reason) {
+  switch (reason) {
+    case QuietUiReason::kEnabledInPrefs:
+      return l10n_util::GetStringUTF16(
+          IDS_LOCATION_QUIET_PERMISSION_MESSAGE_UI);
+    case QuietUiReason::kServicePredictedVeryUnlikelyGrant:
+    case QuietUiReason::kOnDevicePredictedVeryUnlikelyGrant:
+      return l10n_util::GetStringUTF16(
+          IDS_LOCATION_QUIET_PERMISSION_MESSAGE_UI_PREDICTION_SERVICE);
+    default:
+      NOTREACHED();
+  }
+}
 
 std::u16string GetNotificationBlockedUIDescription(QuietUiReason reason) {
   switch (reason) {
@@ -36,7 +66,20 @@ std::u16string GetNotificationBlockedUIDescription(QuietUiReason reason) {
           IDS_NOTIFICATION_QUIET_PERMISSION_INFOBAR_DISRUPTIVE_MESSAGE);
   }
   NOTREACHED();
-  return std::u16string();
+}
+
+std::u16string GetPermissionBlockedUIDescription(
+    QuietUiReason reason,
+    ContentSettingsType content_settings_type) {
+  switch (content_settings_type) {
+    case ContentSettingsType::NOTIFICATIONS:
+      return GetNotificationBlockedUIDescription(reason);
+    case ContentSettingsType::GEOLOCATION:
+    case ContentSettingsType::GEOLOCATION_WITH_OPTIONS:
+      return GetGeolocationBlockedUIDescription(reason);
+    default:
+      NOTREACHED();
+  }
 }
 
 }  // namespace
@@ -48,13 +91,14 @@ QuietPermissionPromptModelAndroid::~QuietPermissionPromptModelAndroid() =
 QuietPermissionPromptModelAndroid::QuietPermissionPromptModelAndroid(
     const QuietPermissionPromptModelAndroid& other) = default;
 
-QuietPermissionPromptModelAndroid GetQuietNotificationPermissionPromptModel(
-    permissions::PermissionUiSelector::QuietUiReason reason) {
+QuietPermissionPromptModelAndroid GetQuietPermissionPromptModel(
+    permissions::PermissionUiSelector::QuietUiReason reason,
+    ContentSettingsType content_settings_type) {
   QuietPermissionPromptModelAndroid model;
-  model.title = l10n_util::GetStringUTF16(
-      IDS_NOTIFICATION_QUIET_PERMISSION_INFOBAR_TITLE);
 
-  model.description = GetNotificationBlockedUIDescription(reason);
+  model.title = GetPermissionBlockedTitle(content_settings_type);
+  model.description =
+      GetPermissionBlockedUIDescription(reason, content_settings_type);
 
   switch (reason) {
     case QuietUiReason::kEnabledInPrefs:

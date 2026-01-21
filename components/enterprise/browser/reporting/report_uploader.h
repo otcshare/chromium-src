@@ -5,19 +5,17 @@
 #ifndef COMPONENTS_ENTERPRISE_BROWSER_REPORTING_REPORT_UPLOADER_H_
 #define COMPONENTS_ENTERPRISE_BROWSER_REPORTING_REPORT_UPLOADER_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
+#include "components/enterprise/browser/reporting/report_generation_config.h"
 #include "components/enterprise/browser/reporting/report_request.h"
+#include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "net/base/backoff_entry.h"
 
 namespace base {
 class OneShotTimer;
 }  // namespace base
-
-namespace policy {
-class CloudPolicyClient;
-}  // namespace policy
 
 namespace net {
 class BackoffEntry;
@@ -53,7 +51,7 @@ class ReportUploader {
 
   // Sets a list of requests and upload it. Request will be uploaded one after
   // another.
-  virtual void SetRequestAndUpload(ReportType report_type,
+  virtual void SetRequestAndUpload(const ReportGenerationConfig& config,
                                    ReportRequestQueue requests,
                                    ReportCallback callback);
 
@@ -63,7 +61,7 @@ class ReportUploader {
 
   // Decides retry behavior based on CloudPolicyClient's status for the current
   // request. Or move to the next request.
-  void OnRequestFinished(bool status);
+  void OnRequestFinished(policy::CloudPolicyClient::Result result);
 
   // Retries the first request in the queue.
   void Retry();
@@ -78,7 +76,7 @@ class ReportUploader {
   raw_ptr<policy::CloudPolicyClient> client_;
   ReportCallback callback_;
   ReportRequestQueue requests_;
-  ReportType report_type_;
+  ReportGenerationConfig config_;
 
   net::BackoffEntry backoff_entry_;
   base::OneShotTimer backoff_request_timer_;

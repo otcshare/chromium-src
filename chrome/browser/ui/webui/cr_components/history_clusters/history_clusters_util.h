@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_CR_COMPONENTS_HISTORY_CLUSTERS_HISTORY_CLUSTERS_UTIL_H_
 #define CHROME_BROWSER_UI_WEBUI_CR_COMPONENTS_HISTORY_CLUSTERS_HISTORY_CLUSTERS_UTIL_H_
 
-constexpr char kIsHistoryClustersVisibleKey[] = "isHistoryClustersVisible";
-constexpr char kIsHistoryClustersVisibleManagedByPolicyKey[] =
-    "isHistoryClustersVisibleManagedByPolicy";
+inline constexpr char kIsHistoryClustersVisibleKey[] =
+    "isHistoryClustersVisible";
+inline constexpr char kRenameJourneysKey[] = "renameJourneys";
 
 class Profile;
 

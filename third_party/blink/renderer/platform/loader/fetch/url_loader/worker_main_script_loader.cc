@@ -4,12 +4,14 @@
 
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/worker_main_script_loader.h"
 
+#include "base/containers/span.h"
 #include "services/network/public/cpp/header_util.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
 #include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
+#include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink.h"
 #include "third_party/blink/public/platform/resource_load_info_notifier_wrapper.h"
 #include "third_party/blink/public/platform/url_conversion.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -21,7 +23,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_timing.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
-#include "third_party/blink/renderer/platform/loader/fetch/resource_timing_info.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_timing_utils.h"
 #include "third_party/blink/renderer/platform/loader/fetch/script_cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/worker_main_script_loader_client.h"
@@ -43,6 +45,7 @@ void WorkerMainScriptLoader::Start(
   DCHECK(resource_load_observer);
   DCHECK(client);
   request_id_ = worker_main_script_load_params->request_id;
+  start_time_ = base::TimeTicks::Now();
   initial_request_ = fetch_params.GetResourceRequest();
   resource_loader_options_ = fetch_params.Options();
   initial_request_url_ = fetch_params.GetResourceRequest().Url();
@@ -56,11 +59,13 @@ void WorkerMainScriptLoader::Start(
   // TODO(crbug.com/929370): Support CSP check to post violation reports for
   // worker top-level scripts, if off-the-main-thread fetch is enabled.
 
+  // Currently we don't support ad resource check for the worker scripts.
   resource_load_info_notifier_wrapper_->NotifyResourceLoadInitiated(
       request_id_, GURL(initial_request_url_),
       initial_request_.HttpMethod().Latin1(),
       WebStringToGURL(WebString(initial_request_.ReferrerString())),
-      initial_request_.GetRequestDestination(), net::HIGHEST);
+      initial_request_.GetRequestDestination(), net::HIGHEST,
+      /*is_ad_resource=*/false);
 
   if (!worker_main_script_load_params->redirect_responses.empty()) {
     HandleRedirections(worker_main_script_load_params->redirect_infos,
@@ -86,7 +91,7 @@ void WorkerMainScriptLoader::Start(
     client_->OnFailedLoadingWorkerMainScript();
     resource_load_observer_->DidFailLoading(
         initial_request_.Url(), initial_request_.InspectorId(),
-        ResourceError(net::ERR_FAILED, last_request_url_, absl::nullopt),
+        ResourceError(net::ERR_FAILED, last_request_url_, std::nullopt),
         resource_response_.EncodedDataLength(),
         ResourceLoadObserver::IsInternalRequest(
             resource_loader_options_.initiator_info.name ==
@@ -94,21 +99,20 @@ void WorkerMainScriptLoader::Start(
     return;
   }
 
-  script_encoding_ =
-      resource_response_.TextEncodingName().empty()
-          ? UTF8Encoding()
-          : WTF::TextEncoding(resource_response_.TextEncodingName());
+  script_encoding_ = resource_response_.TextEncodingName().empty()
+                         ? Utf8Encoding()
+                         : TextEncoding(resource_response_.TextEncodingName());
 
   url_loader_remote_.Bind(std::move(
       worker_main_script_load_params->url_loader_client_endpoints->url_loader));
   receiver_.Bind(
       std::move(worker_main_script_load_params->url_loader_client_endpoints
                     ->url_loader_client));
-  receiver_.set_disconnect_handler(WTF::BindOnce(
+  receiver_.set_disconnect_handler(BindOnce(
       &WorkerMainScriptLoader::OnConnectionClosed, WrapWeakPersistent(this)));
   data_pipe_ = std::move(worker_main_script_load_params->response_body);
 
-  client_->OnStartLoadingBody(resource_response_);
+  client_->OnStartLoadingBodyWorkerMainScript(resource_response_);
   StartLoadingBody();
 }
 
@@ -132,7 +136,7 @@ void WorkerMainScriptLoader::OnReceiveEarlyHints(
 void WorkerMainScriptLoader::OnReceiveResponse(
     network::mojom::URLResponseHeadPtr response_head,
     mojo::ScopedDataPipeConsumerHandle handle,
-    absl::optional<mojo_base::BigBuffer> cached_metadata) {
+    std::optional<mojo_base::BigBuffer> cached_metadata) {
   // This has already happened in the browser process.
   NOTREACHED();
 }
@@ -163,14 +167,22 @@ void WorkerMainScriptLoader::OnComplete(
     has_seen_end_of_data_ = true;
 
   // Reports resource timing info for the worker main script.
-  scoped_refptr<ResourceTimingInfo> timing_info = ResourceTimingInfo::Create(
-      g_empty_atom, base::TimeTicks::Now(),
-      initial_request_.GetRequestContext(),
-      initial_request_.GetRequestDestination(), initial_request_.GetMode());
-  timing_info->SetInitialURL(initial_request_url_);
-  timing_info->SetFinalResponse(resource_response_);
-  timing_info->SetLoadResponseEnd(status.completion_time);
-  fetch_context_->AddResourceTiming(*timing_info);
+  resource_response_.SetEncodedBodyLength(status.encoded_body_length);
+  resource_response_.SetDecodedBodyLength(status.decoded_body_length);
+  resource_response_.SetCurrentRequestUrl(last_request_url_);
+
+  // https://fetch.spec.whatwg.org/#fetch-finale
+  // Step 3.3.1. If fetchParams's request's URL's scheme is not an HTTP(S)
+  // scheme, then return.
+  //
+  // i.e. call `AddResourceTiming()` only if the URL's scheme is HTTP(S).
+  if (initial_request_url_.ProtocolIsInHTTPFamily()) {
+    mojom::blink::ResourceTimingInfoPtr timing_info = CreateResourceTimingInfo(
+        start_time_, initial_request_url_, &resource_response_);
+    timing_info->response_end = status.completion_time;
+    fetch_context_->AddResourceTiming(std::move(timing_info),
+                                      fetch_initiator_type_names::kOther);
+  }
 
   has_received_completion_ = true;
   status_ = status;
@@ -196,6 +208,7 @@ void WorkerMainScriptLoader::Trace(Visitor* visitor) const {
   visitor->Trace(fetch_context_);
   visitor->Trace(resource_load_observer_);
   visitor->Trace(client_);
+  visitor->Trace(resource_loader_options_);
 }
 
 void WorkerMainScriptLoader::StartLoadingBody() {
@@ -207,8 +220,8 @@ void WorkerMainScriptLoader::StartLoadingBody() {
       FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::MANUAL);
   MojoResult rv =
       watcher_->Watch(data_pipe_.get(), MOJO_HANDLE_SIGNAL_READABLE,
-                      WTF::BindRepeating(&WorkerMainScriptLoader::OnReadable,
-                                         WrapWeakPersistent(this)));
+                      BindRepeating(&WorkerMainScriptLoader::OnReadable,
+                                    WrapWeakPersistent(this)));
   DCHECK_EQ(MOJO_RESULT_OK, rv);
   watcher_->ArmOrNotify();
 }
@@ -216,16 +229,12 @@ void WorkerMainScriptLoader::StartLoadingBody() {
 void WorkerMainScriptLoader::OnReadable(MojoResult) {
   // It isn't necessary to handle MojoResult here since BeginReadDataRaw()
   // returns an equivalent error.
-  const char* buffer = nullptr;
-  uint32_t bytes_read = 0;
-  MojoResult rv =
-      data_pipe_->BeginReadData(reinterpret_cast<const void**>(&buffer),
-                                &bytes_read, MOJO_READ_DATA_FLAG_NONE);
+  base::span<const uint8_t> buffer;
+  MojoResult rv = data_pipe_->BeginReadData(MOJO_READ_DATA_FLAG_NONE, buffer);
   switch (rv) {
     case MOJO_RESULT_BUSY:
     case MOJO_RESULT_INVALID_ARGUMENT:
       NOTREACHED();
-      return;
     case MOJO_RESULT_FAILED_PRECONDITION:
       has_seen_end_of_data_ = true;
       NotifyCompletionIfAppropriate();
@@ -240,14 +249,14 @@ void WorkerMainScriptLoader::OnReadable(MojoResult) {
       return;
   }
 
-  if (bytes_read > 0) {
-    base::span<const char> span = base::make_span(buffer, bytes_read);
-    client_->DidReceiveData(span);
+  if (!buffer.empty()) {
+    base::span<const char> chars = base::as_chars(buffer);
+    client_->DidReceiveDataWorkerMainScript(chars);
     resource_load_observer_->DidReceiveData(initial_request_.InspectorId(),
-                                            span);
+                                            base::SpanOrSize(chars));
   }
 
-  rv = data_pipe_->EndReadData(bytes_read);
+  rv = data_pipe_->EndReadData(buffer.size());
   DCHECK_EQ(rv, MOJO_RESULT_OK);
   watcher_->ArmOrNotify();
 }
@@ -270,13 +279,12 @@ void WorkerMainScriptLoader::NotifyCompletionIfAppropriate() {
     resource_load_observer_->DidFinishLoading(
         initial_request_.InspectorId(), base::TimeTicks::Now(),
         resource_response_.EncodedDataLength(),
-        resource_response_.DecodedBodyLength(),
-        /*should_report_corb_blocking=*/false);
+        resource_response_.DecodedBodyLength());
   } else {
     client->OnFailedLoadingWorkerMainScript();
     resource_load_observer_->DidFailLoading(
         last_request_url_, initial_request_.InspectorId(),
-        ResourceError(status_.error_code, last_request_url_, absl::nullopt),
+        ResourceError(status_.error_code, last_request_url_, std::nullopt),
         resource_response_.EncodedDataLength(),
         ResourceLoadObserver::IsInternalRequest(
             ResourceLoadObserver::IsInternalRequest(
@@ -300,21 +308,6 @@ void WorkerMainScriptLoader::HandleRedirections(
     auto& redirect_info = redirect_infos[i];
     auto& redirect_response = redirect_responses[i];
     last_request_url_ = KURL(redirect_info.new_url);
-
-    std::unique_ptr<ResourceRequest> new_request =
-        initial_request_.CreateRedirectRequest(
-            KURL(redirect_info.new_url),
-            AtomicString::FromUTF8(redirect_info.new_method.data(),
-                                   redirect_info.new_method.length()),
-            redirect_info.new_site_for_cookies,
-            AtomicString::FromUTF8(redirect_info.new_referrer.data(),
-                                   redirect_info.new_referrer.length()),
-            ReferrerUtils::NetToMojoReferrerPolicy(
-                redirect_info.new_referrer_policy),
-            /*skip_service_worker=*/false);
-    WebURLResponse response = WebURLResponse::Create(
-        WebURL(last_request_url_), *redirect_response,
-        redirect_response->ssl_info.has_value(), request_id_);
     resource_load_info_notifier_wrapper_->NotifyResourceRedirectReceived(
         redirect_info, std::move(redirect_response));
   }

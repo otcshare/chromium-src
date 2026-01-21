@@ -6,6 +6,7 @@ import("//build/config/android/rules.gni")
 
 android_library("bootstrap_java") {
   sources = [
+    "java/org/chromium/incrementalinstall/BootstrapAppComponentFactory.java",
     "java/org/chromium/incrementalinstall/BootstrapApplication.java",
     "java/org/chromium/incrementalinstall/BootstrapInstrumentation.java",
     "java/org/chromium/incrementalinstall/ClassLoaderPatcher.java",
@@ -13,8 +14,9 @@ android_library("bootstrap_java") {
     "java/org/chromium/incrementalinstall/Reflect.java",
     "java/org/chromium/incrementalinstall/SecondInstrumentation.java",
   ]
+  deps = [ "third_party/AndroidHiddenApiBypass:hidden_api_bypass_java" ]
   jacoco_never_instrument = true
-  no_build_hooks = true
+  chromium_code = false  # Disable build_java default dep.
 }
 
 dist_dex("apk_dex") {

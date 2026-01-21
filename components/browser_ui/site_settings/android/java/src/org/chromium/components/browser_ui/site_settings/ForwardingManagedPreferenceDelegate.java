@@ -4,8 +4,10 @@
 
 package org.chromium.components.browser_ui.site_settings;
 
+import androidx.annotation.LayoutRes;
 import androidx.preference.Preference;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
 
 /**
@@ -16,6 +18,7 @@ import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
  * will forward to the base implementation, which will typically be the embedder-provided
  * ManagedPreferenceDelegate instance.
  */
+@NullMarked
 public class ForwardingManagedPreferenceDelegate implements ManagedPreferenceDelegate {
     private final ManagedPreferenceDelegate mBase;
 
@@ -36,6 +39,11 @@ public class ForwardingManagedPreferenceDelegate implements ManagedPreferenceDel
     @Override
     public boolean doesProfileHaveMultipleCustodians() {
         return mBase.doesProfileHaveMultipleCustodians();
+    }
+
+    @Override
+    public @LayoutRes int defaultPreferenceLayoutResource() {
+        return mBase.defaultPreferenceLayoutResource();
     }
 
     /* Do not override the 'isPreferenceClickDisabledByPolicy' method in this class as this causes

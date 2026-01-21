@@ -2,31 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/renderer_host/render_frame_host_impl.h"
+
 #include <memory>
 
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/buildflag.h"
+#include "components/input/timeout_monitor.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
-#include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/common/content_navigation_policy.h"
+#include "content/common/features.h"
 #include "content/public/browser/cors_origin_pattern_setter.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_features.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/fake_local_frame.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/navigation_simulator_impl.h"
+#include "content/test/test_render_frame_host.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "net/base/features.h"
 #include "net/base/isolation_info.h"
+#include "net/base/network_isolation_partition.h"
 #include "net/cookies/site_for_cookies.h"
 #include "services/network/public/cpp/cors/origin_access_list.h"
 #include "services/network/public/mojom/cors.mojom.h"
 #include "services/network/public/mojom/cors_origin_pattern.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_context.h"
+#include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_read_context.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
@@ -34,11 +44,23 @@
 #include "url/origin.h"
 #include "url/url_util.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "content/public/browser/authenticator_request_client_delegate.h"
-#endif  // BUIDLFLAG(IS_ANDROID)
-
 namespace content {
+
+namespace {
+
+void AddHostPermissions(const std::string& host, RenderFrameHost* rfh) {
+  std::vector<network::mojom::CorsOriginPatternPtr> patterns;
+  base::RunLoop run_loop;
+  patterns.push_back(network::mojom::CorsOriginPattern::New(
+      "https", host, 0, network::mojom::CorsDomainMatchMode::kAllowSubdomains,
+      network::mojom::CorsPortMatchMode::kAllowAnyPort,
+      network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority));
+  CorsOriginPatternSetter::Set(rfh->GetBrowserContext(),
+                               rfh->GetLastCommittedOrigin(),
+                               std::move(patterns), {}, run_loop.QuitClosure());
+  run_loop.Run();
+}
+}  // namespace
 
 class RenderFrameHostImplTest : public RenderViewHostImplTestHarness {
  public:
@@ -48,7 +70,39 @@ class RenderFrameHostImplTest : public RenderViewHostImplTestHarness {
   }
 };
 
-TEST_F(RenderFrameHostImplTest, ExpectedMainWorldOrigin) {
+// TODO(crbug.com/40260854): This set-up is temporary. Eventually, all
+// tests that reference extensions will be moved to chrome/browser/ and this
+// class can be deleted.
+class FirstPartyOverrideContentBrowserClient : public ContentBrowserClient {
+ public:
+  FirstPartyOverrideContentBrowserClient() = default;
+  ~FirstPartyOverrideContentBrowserClient() override = default;
+
+ private:
+  bool ShouldUseFirstPartyStorageKey(const url::Origin& origin) override {
+    return origin.scheme() == "chrome-extension";
+  }
+};
+
+// A test class that forces kOriginKeyedProcessesByDefault off for tests that
+// require that same-site cross-origin navigations don't trigger a RFH swap.
+class RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault
+    : public RenderFrameHostImplTest {
+ public:
+  RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault() {
+    feature_list_.InitAndDisableFeature(
+        features::kOriginKeyedProcessesByDefault);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Note: Since this test is predicate on not having a RFH swap for a
+// cross-origin, same-site navigation, it only makes sense to run it with
+// kOriginKeyedProcessesByDefault disabled.
+TEST_F(RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault,
+       ExpectedMainWorldOrigin) {
   GURL initial_url = GURL("https://initial.example.test/");
   GURL final_url = GURL("https://final.example.test/");
 
@@ -72,18 +126,19 @@ TEST_F(RenderFrameHostImplTest, ExpectedMainWorldOrigin) {
   // This test is for a bug that only happens when there is no RFH swap on
   // same-site navigations, so we should disable same-site proactive
   // BrowsingInstance for |initial_rfh| before continiung.
-  // Note: this will not disable RenderDocument.
-  // TODO(crbug.com/936696): Skip this test when main-frame RenderDocument is
-  // enabled.
   DisableProactiveBrowsingInstanceSwapFor(initial_rfh);
+  if (ShouldCreateNewHostForAllFrames()) {
+    GTEST_SKIP();
+  }
   // Verify expected main world origin in a steady state - after a commit it
   // should be the same as the last committed origin.
   EXPECT_EQ(url::Origin::Create(initial_url),
             get_expected_main_world_origin(main_rfh()));
   EXPECT_EQ(url::Origin::Create(initial_url),
             main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(blink::StorageKey(url::Origin::Create(initial_url)),
-            main_test_rfh()->storage_key());
+  EXPECT_EQ(
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(initial_url)),
+      main_test_rfh()->GetStorageKey());
 
   // Verify expected main world origin when a pending navigation was started but
   // hasn't yet reached the ready-to-commit state.
@@ -102,8 +157,9 @@ TEST_F(RenderFrameHostImplTest, ExpectedMainWorldOrigin) {
             get_expected_main_world_origin(main_rfh()));
   EXPECT_EQ(url::Origin::Create(initial_url),
             main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(blink::StorageKey(url::Origin::Create(initial_url)),
-            main_test_rfh()->storage_key());
+  EXPECT_EQ(
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(initial_url)),
+      main_test_rfh()->GetStorageKey());
 
   // Verify expected main world origin once we are again in a steady state -
   // after a commit.
@@ -112,14 +168,30 @@ TEST_F(RenderFrameHostImplTest, ExpectedMainWorldOrigin) {
             get_expected_main_world_origin(main_rfh()));
   EXPECT_EQ(url::Origin::Create(final_url),
             main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(blink::StorageKey(url::Origin::Create(final_url)),
-            main_test_rfh()->storage_key());
+  EXPECT_EQ(blink::StorageKey::CreateFirstParty(url::Origin::Create(final_url)),
+            main_test_rfh()->GetStorageKey());
 
   // As a test correctness check, verify that there was no RFH swap (the bug
   // this test protects against would only happen if there is no swap).  In
   // fact, FindLatestNavigationRequestThatIsStillCommitting might possibly be
   // removed entirely once we swap on all document changes.
   EXPECT_EQ(initial_rfh, main_rfh());
+}
+
+// Test that navigating to an invalid URL (which creates an empty GURL) causes
+// about:blank to commit.
+TEST_F(RenderFrameHostImplTest, InvalidURL) {
+  // Start from a valid commit.
+  NavigateAndCommit(GURL("https://test.example.com"));
+
+  // Attempt to navigate to a non-empty invalid URL, which GURL treats as an
+  // empty invalid URL. Blink treats navigations to an empty URL as navigations
+  // to about:blank.
+  GURL invalid_url("invalidurl");
+  EXPECT_TRUE(invalid_url.is_empty());
+  EXPECT_FALSE(invalid_url.is_valid());
+  NavigateAndCommit(invalid_url);
+  EXPECT_EQ(GURL(url::kAboutBlankURL), main_rfh()->GetLastCommittedURL());
 }
 
 // Ensures that IsolationInfo's SiteForCookies is empty and
@@ -157,19 +229,17 @@ TEST_F(RenderFrameHostImplTest, CrossSiteAncestorInFrameTree) {
 
   // Constructing expected values.
   url::Origin expected_final_origin = url::Origin::Create(parent_url);
-  blink::StorageKey expected_final_storage_key =
-      blink::StorageKey::CreateWithOptionalNonce(
-          expected_final_origin, net::SchemefulSite(expected_final_origin),
-          nullptr, blink::mojom::AncestorChainBit::kCrossSite);
-  // Set should contain the set of sites between the current and top frame.
-  std::set<net::SchemefulSite> party_context = {
-      net::SchemefulSite(child_url_1)};
+  blink::StorageKey expected_final_storage_key = blink::StorageKey::Create(
+      expected_final_origin, net::SchemefulSite(expected_final_origin),
+      blink::mojom::AncestorChainBit::kCrossSite);
   net::IsolationInfo expected_final_isolation_info = net::IsolationInfo::Create(
       net::IsolationInfo::RequestType::kOther, expected_final_origin,
-      expected_final_origin, net::SiteForCookies(), party_context);
+      expected_final_origin, net::SiteForCookies(), /*nonce=*/std::nullopt,
+      net::NetworkIsolationPartition::kGeneral,
+      net::IsolationInfo::FrameAncestorRelation::kCrossSite);
 
   EXPECT_EQ(expected_final_origin, child_rfh_2->GetLastCommittedOrigin());
-  EXPECT_EQ(expected_final_storage_key, child_rfh_2->storage_key());
+  EXPECT_EQ(expected_final_storage_key, child_rfh_2->GetStorageKey());
   EXPECT_TRUE(expected_final_isolation_info.IsEqualForTesting(
       child_rfh_2->GetIsolationInfoForSubresources()));
   EXPECT_EQ(expected_final_isolation_info.network_isolation_key(),
@@ -183,28 +253,33 @@ TEST_F(RenderFrameHostImplTest, CrossSiteAncestorInFrameTree) {
 // Test the IsolationInfo and related fields of a request during the various
 // phases of a commit, when a RenderFrameHost is reused. Once RenderDocument
 // ships, this test may no longer be needed.
-TEST_F(RenderFrameHostImplTest, IsolationInfoDuringCommit) {
+// Note: Since this test is predicate on not having a RFH swap for a
+// cross-origin, same-site navigation, it only makes sense to run it with
+// kOriginKeyedProcessesByDefault disabled.
+TEST_F(RenderFrameHostImplTest_NoOriginKeyedProcessesByDefault,
+       IsolationInfoDuringCommit) {
   GURL initial_url = GURL("https://initial.example.test/");
   url::Origin expected_initial_origin = url::Origin::Create(initial_url);
-  blink::StorageKey expected_initial_storage_key =
-      blink::StorageKey(expected_initial_origin);
+  const blink::StorageKey expected_initial_storage_key =
+      blink::StorageKey::CreateFirstParty(expected_initial_origin);
   net::IsolationInfo expected_initial_isolation_info =
       net::IsolationInfo::Create(
           net::IsolationInfo::RequestType::kOther, expected_initial_origin,
           expected_initial_origin,
           net::SiteForCookies::FromOrigin(expected_initial_origin),
-          std::set<net::SchemefulSite>());
+          /*nonce=*/std::nullopt, net::NetworkIsolationPartition::kGeneral,
+          net::IsolationInfo::FrameAncestorRelation::kSameOrigin);
 
   GURL final_url = GURL("https://final.example.test/");
   url::Origin expected_final_origin = url::Origin::Create(final_url);
-  blink::StorageKey expected_final_storage_key =
-      blink::StorageKey(expected_final_origin);
+  const blink::StorageKey expected_final_storage_key =
+      blink::StorageKey::CreateFirstParty(expected_final_origin);
   net::IsolationInfo expected_final_isolation_info = net::IsolationInfo::Create(
       net::IsolationInfo::RequestType::kOther, expected_final_origin,
       expected_final_origin,
       net::SiteForCookies::FromOrigin(expected_final_origin),
-      std::set<net::SchemefulSite>());
-
+      /*nonce=*/std::nullopt, net::NetworkIsolationPartition::kGeneral,
+      net::IsolationInfo::FrameAncestorRelation::kSameOrigin);
   // Start the test with a simple navigation.
   {
     std::unique_ptr<NavigationSimulator> simulator =
@@ -216,10 +291,13 @@ TEST_F(RenderFrameHostImplTest, IsolationInfoDuringCommit) {
   // This test is targetted at the case an RFH is reused between navigations.
   RenderFrameHost* initial_rfh = main_rfh();
   DisableProactiveBrowsingInstanceSwapFor(main_rfh());
+  if (ShouldCreateNewHostForAllFrames()) {
+    GTEST_SKIP();
+  }
 
   // Check values for the initial commit.
   EXPECT_EQ(expected_initial_origin, main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(expected_initial_storage_key, main_test_rfh()->storage_key());
+  EXPECT_EQ(expected_initial_storage_key, main_test_rfh()->GetStorageKey());
   EXPECT_TRUE(expected_initial_isolation_info.IsEqualForTesting(
       main_rfh()->GetIsolationInfoForSubresources()));
   EXPECT_EQ(expected_initial_isolation_info.network_isolation_key(),
@@ -235,7 +313,7 @@ TEST_F(RenderFrameHostImplTest, IsolationInfoDuringCommit) {
       NavigationSimulator::CreateRendererInitiated(final_url, main_rfh());
   simulator2->Start();
   EXPECT_EQ(expected_initial_origin, main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(expected_initial_storage_key, main_test_rfh()->storage_key());
+  EXPECT_EQ(expected_initial_storage_key, main_test_rfh()->GetStorageKey());
   EXPECT_TRUE(expected_initial_isolation_info.IsEqualForTesting(
       main_rfh()->GetIsolationInfoForSubresources()));
   EXPECT_EQ(expected_initial_isolation_info.network_isolation_key(),
@@ -250,7 +328,7 @@ TEST_F(RenderFrameHostImplTest, IsolationInfoDuringCommit) {
   simulator2->ReadyToCommit();
   simulator2->Wait();
   EXPECT_EQ(expected_initial_origin, main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(expected_initial_storage_key, main_test_rfh()->storage_key());
+  EXPECT_EQ(expected_initial_storage_key, main_test_rfh()->GetStorageKey());
   EXPECT_TRUE(expected_initial_isolation_info.IsEqualForTesting(
       main_rfh()->GetIsolationInfoForSubresources()));
   EXPECT_EQ(expected_initial_isolation_info.network_isolation_key(),
@@ -264,7 +342,7 @@ TEST_F(RenderFrameHostImplTest, IsolationInfoDuringCommit) {
   // after a commit.
   simulator2->Commit();
   EXPECT_EQ(expected_final_origin, main_rfh()->GetLastCommittedOrigin());
-  EXPECT_EQ(expected_final_storage_key, main_test_rfh()->storage_key());
+  EXPECT_EQ(expected_final_storage_key, main_test_rfh()->GetStorageKey());
   EXPECT_TRUE(expected_final_isolation_info.IsEqualForTesting(
       main_rfh()->GetIsolationInfoForSubresources()));
   EXPECT_EQ(expected_final_isolation_info.network_isolation_key(),
@@ -319,9 +397,9 @@ TEST_F(RenderFrameHostImplTest, PolicyContainerLifecycle) {
 
 TEST_F(RenderFrameHostImplTest, FaviconURLsSet) {
   TestRenderFrameHost* main_rfh = contents()->GetPrimaryMainFrame();
-  const auto kFavicon =
-      blink::mojom::FaviconURL(GURL("https://example.com/favicon.ico"),
-                               blink::mojom::FaviconIconType::kFavicon, {});
+  const auto kFavicon = blink::mojom::FaviconURL(
+      GURL("https://example.com/favicon.ico"),
+      blink::mojom::FaviconIconType::kFavicon, {}, /*is_default_icon=*/false);
   std::unique_ptr<NavigationSimulator> navigation =
       NavigationSimulator::CreateBrowserInitiated(GURL("https://example.com"),
                                                   contents());
@@ -352,7 +430,8 @@ TEST_F(RenderFrameHostImplTest, FaviconURLsResetWithNavigation) {
   std::vector<blink::mojom::FaviconURLPtr> favicon_urls;
   favicon_urls.push_back(blink::mojom::FaviconURL::New(
       GURL("https://example.com/favicon.ico"),
-      blink::mojom::FaviconIconType::kFavicon, std::vector<gfx::Size>()));
+      blink::mojom::FaviconIconType::kFavicon, std::vector<gfx::Size>(),
+      /*is_default_icon=*/false));
 
   std::unique_ptr<NavigationSimulator> navigation =
       NavigationSimulator::CreateBrowserInitiated(GURL("https://example.com"),
@@ -379,7 +458,7 @@ TEST_F(RenderFrameHostImplTest, ChildOfCredentiallessIsCredentialless) {
       content::RenderFrameHostTester::For(main_test_rfh())
           ->AppendChild("child"));
   EXPECT_FALSE(child_frame->IsCredentialless());
-  EXPECT_FALSE(child_frame->storage_key().nonce().has_value());
+  EXPECT_FALSE(child_frame->GetStorageKey().nonce().has_value());
 
   auto attributes = blink::mojom::IframeAttributes::New();
   attributes->parsed_csp_attribute = std::move(
@@ -391,7 +470,7 @@ TEST_F(RenderFrameHostImplTest, ChildOfCredentiallessIsCredentialless) {
   child_frame->frame_tree_node()->SetAttributes(std::move(attributes));
 
   EXPECT_FALSE(child_frame->IsCredentialless());
-  EXPECT_FALSE(child_frame->storage_key().nonce().has_value());
+  EXPECT_FALSE(child_frame->GetStorageKey().nonce().has_value());
 
   // A navigation in the credentialless iframe commits a credentialless RFH.
   std::unique_ptr<NavigationSimulator> navigation =
@@ -401,11 +480,11 @@ TEST_F(RenderFrameHostImplTest, ChildOfCredentiallessIsCredentialless) {
   child_frame =
       static_cast<TestRenderFrameHost*>(navigation->GetFinalRenderFrameHost());
   EXPECT_TRUE(child_frame->IsCredentialless());
-  EXPECT_TRUE(child_frame->storage_key().nonce().has_value());
+  EXPECT_TRUE(child_frame->GetStorageKey().nonce().has_value());
 
   // A credentialless document sets a nonce on its network isolation key.
   EXPECT_TRUE(child_frame->GetNetworkIsolationKey().GetNonce().has_value());
-  EXPECT_EQ(main_test_rfh()->credentialless_iframes_nonce(),
+  EXPECT_EQ(main_test_rfh()->GetPage().credentialless_iframes_nonce(),
             child_frame->GetNetworkIsolationKey().GetNonce().value());
 
   // A child of a credentialless RFH is credentialless.
@@ -413,17 +492,17 @@ TEST_F(RenderFrameHostImplTest, ChildOfCredentiallessIsCredentialless) {
       content::RenderFrameHostTester::For(child_frame)
           ->AppendChild("grandchild"));
   EXPECT_TRUE(grandchild_frame->IsCredentialless());
-  EXPECT_TRUE(grandchild_frame->storage_key().nonce().has_value());
+  EXPECT_TRUE(grandchild_frame->GetStorageKey().nonce().has_value());
 
   // The two credentialless RFH's storage keys should have the same nonce.
-  EXPECT_EQ(child_frame->storage_key().nonce().value(),
-            grandchild_frame->storage_key().nonce().value());
+  EXPECT_EQ(child_frame->GetStorageKey().nonce().value(),
+            grandchild_frame->GetStorageKey().nonce().value());
 
   // Also the credentialless initial empty document sets a nonce on its network
   // isolation key.
   EXPECT_TRUE(
       grandchild_frame->GetNetworkIsolationKey().GetNonce().has_value());
-  EXPECT_EQ(main_test_rfh()->credentialless_iframes_nonce(),
+  EXPECT_EQ(main_test_rfh()->GetPage().credentialless_iframes_nonce(),
             grandchild_frame->GetNetworkIsolationKey().GetNonce().value());
 }
 
@@ -434,51 +513,48 @@ class FakeLocalFrameWithBeforeUnload : public content::FakeLocalFrame {
     Init(test_host->GetRemoteAssociatedInterfaces());
   }
 
-  bool was_before_unload_called() const { return was_before_unload_called_; }
-
-  void RunBeforeUnloadCallback() {
-    ASSERT_TRUE(before_unload_callback_);
-    std::move(before_unload_callback_)
-        .Run(true, base::TimeTicks::Now(), base::TimeTicks::Now());
+  bool was_before_unload_sent_to_renderer() const {
+    return was_before_unload_sent_to_renderer_;
   }
 
   // FakeLocalFrame:
   void BeforeUnload(bool is_reload, BeforeUnloadCallback callback) override {
-    was_before_unload_called_ = true;
-    before_unload_callback_ = std::move(callback);
+    was_before_unload_sent_to_renderer_ = true;
   }
 
  private:
-  bool was_before_unload_called_ = false;
-  BeforeUnloadCallback before_unload_callback_;
+  bool was_before_unload_sent_to_renderer_ = false;
 };
 
 // Verifies BeforeUnload() is not sent to renderer if there is no before
 // unload handler present.
 TEST_F(RenderFrameHostImplTest, BeforeUnloadNotSentToRenderer) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {}, {features::kAvoidUnnecessaryBeforeUnloadCheckSync});
-  FakeLocalFrameWithBeforeUnload local_frame(contents()->GetPrimaryMainFrame());
+  TestRenderFrameHost* rfh = contents()->GetPrimaryMainFrame();
+  base::RunLoop run_loop;
+  bool before_unload_completed = false;
+  rfh->set_on_process_before_unload_completed_for_testing(
+      base::BindLambdaForTesting([&]() {
+        before_unload_completed = true;
+        EXPECT_TRUE(rfh->is_waiting_for_beforeunload_completion());
+        run_loop.Quit();
+      }));
+  FakeLocalFrameWithBeforeUnload local_frame(rfh);
   auto simulator = NavigationSimulatorImpl::CreateBrowserInitiated(
       GURL("https://example.com/simple.html"), contents());
   simulator->set_block_invoking_before_unload_completed_callback(true);
   simulator->Start();
-  EXPECT_TRUE(contents()
-                  ->GetPrimaryMainFrame()
-                  ->is_waiting_for_beforeunload_completion());
-  EXPECT_FALSE(local_frame.was_before_unload_called());
+  run_loop.Run();
+  EXPECT_TRUE(before_unload_completed);
+  EXPECT_FALSE(local_frame.was_before_unload_sent_to_renderer());
   // This is necessary to trigger FakeLocalFrameWithBeforeUnload to be bound.
-  contents()->GetPrimaryMainFrame()->FlushLocalFrameMessages();
+  rfh->FlushLocalFrameMessages();
   // This runs a MessageLoop, which also results in the PostTask() scheduled
   // completing.
   local_frame.FlushMessages();
-  EXPECT_FALSE(local_frame.was_before_unload_called());
+  EXPECT_FALSE(local_frame.was_before_unload_sent_to_renderer());
   // Because of the nested message loops run by the previous calls, the task
   // that RenderFrameHostImpl will have also completed.
-  EXPECT_FALSE(contents()
-                   ->GetPrimaryMainFrame()
-                   ->is_waiting_for_beforeunload_completion());
+  EXPECT_FALSE(rfh->is_waiting_for_beforeunload_completion());
 }
 
 class LoadingStateChangedDelegate : public WebContentsDelegate {
@@ -518,18 +594,78 @@ TEST_F(RenderFrameHostImplTest, NavigationApiInterceptShowLoadingUi) {
   params->method = "GET";
   params->page_state = blink::PageState::CreateFromURL(url2);
   params->post_id = -1;
+  params->document_sequence_number = 1;
   main_test_rfh()->SendDidCommitSameDocumentNavigation(
       std::move(params),
       blink::mojom::SameDocumentNavigationType::kNavigationApiIntercept,
       /*should_replace_current_entry=*/false);
+  EXPECT_FALSE(delegate->should_show_loading_ui());
+  EXPECT_TRUE(contents()->IsLoading());
+  EXPECT_FALSE(contents()->ShouldShowLoadingUI());
 
-  // navigateEvent.intercept() should leave WebContents in the loading
-  // state and showing loading UI, unlike other same-document navigations.
+  // After a delay, the NavigationApi sends a message to start the loading UI.
+  // This delay is to prevent jitters due to short same-document navigations.
+  main_test_rfh()->SendStartLoadingForAsyncNavigationApiCommit();
+
+  // Once the delay has elapsed, navigateEvent.intercept() should leave
+  // WebContents in the loading state and showing loading UI, unlike other
+  // same-document navigations.
   EXPECT_TRUE(delegate->should_show_loading_ui());
   EXPECT_TRUE(contents()->IsLoading());
   EXPECT_TRUE(contents()->ShouldShowLoadingUI());
 }
 
+TEST_F(RenderFrameHostImplTest, NavigationApiInterceptBrowserInitiated) {
+  // Initial commit.
+  const GURL url1("http://foo");
+  NavigationSimulator::NavigateAndCommitFromDocument(url1, main_test_rfh());
+
+  std::unique_ptr<LoadingStateChangedDelegate> delegate =
+      std::make_unique<LoadingStateChangedDelegate>();
+  contents()->SetDelegate(delegate.get());
+  ASSERT_FALSE(delegate->should_show_loading_ui());
+  ASSERT_FALSE(contents()->IsLoading());
+  ASSERT_FALSE(contents()->ShouldShowLoadingUI());
+
+  // Emulate navigateEvent.intercept().
+  const GURL url2("http://foo#a");
+  std::unique_ptr<NavigationSimulator> navigation =
+      NavigationSimulator::CreateBrowserInitiated(url2, contents());
+  navigation->Start();
+  ASSERT_TRUE(contents()->IsLoading());
+  ASSERT_FALSE(contents()->ShouldShowLoadingUI());
+
+  auto params = mojom::DidCommitProvisionalLoadParams::New();
+  params->did_create_new_entry = false;
+  params->url = url2;
+  params->origin = url::Origin::Create(url2);
+  params->referrer = blink::mojom::Referrer::New();
+  params->transition = ui::PAGE_TRANSITION_LINK;
+  params->should_update_history = true;
+  params->method = "GET";
+  params->page_state = blink::PageState::CreateFromURL(url2);
+  params->post_id = -1;
+  params->document_sequence_number = 1;
+  main_test_rfh()->SendDidCommitSameDocumentNavigation(
+      std::move(params),
+      blink::mojom::SameDocumentNavigationType::kNavigationApiIntercept, true);
+  EXPECT_FALSE(delegate->should_show_loading_ui());
+  EXPECT_TRUE(contents()->IsLoading());
+  EXPECT_FALSE(contents()->ShouldShowLoadingUI());
+
+  // After a delay, the NavigationApi sends a message to start the loading UI.
+  // This delay is to prevent jitters due to short same-document navigations.
+  main_test_rfh()->SendStartLoadingForAsyncNavigationApiCommit();
+
+  // Once the delay has elapsed, navigateEvent.intercept() should leave
+  // WebContents in the loading state and showing loading UI, unlike other
+  // same-document navigations.
+  EXPECT_TRUE(delegate->should_show_loading_ui());
+  EXPECT_TRUE(contents()->IsLoading());
+  EXPECT_TRUE(contents()->ShouldShowLoadingUI());
+}
+
+// TODO(crbug.com/40260854): This test should be migrated to //chrome.
 TEST_F(RenderFrameHostImplTest, CalculateStorageKey) {
   // Register extension scheme for testing.
   url::ScopedSchemeRegistryForTests scoped_registry;
@@ -562,9 +698,9 @@ TEST_F(RenderFrameHostImplTest, CalculateStorageKey) {
   // With no host permissions the grandchild document should have a cross-site
   // storage key with the `initial_url_ext` as it's top level origin.
   blink::StorageKey expected_grandchild_no_permissions_storage_key =
-      blink::StorageKey::CreateWithOptionalNonce(
+      blink::StorageKey::Create(
           grandchild_frame->GetLastCommittedOrigin(),
-          net::SchemefulSite(url::Origin::Create(initial_url_ext)), nullptr,
+          net::SchemefulSite(url::Origin::Create(initial_url_ext)),
           blink::mojom::AncestorChainBit::kCrossSite);
 
   EXPECT_EQ(expected_grandchild_no_permissions_storage_key,
@@ -575,17 +711,7 @@ TEST_F(RenderFrameHostImplTest, CalculateStorageKey) {
   // `grandchild_frame` is not the root non-extension frame
   // `CalculateStorageKey` should still create a storage key that has the
   // extension as the `top_level_site`.
-  std::vector<network::mojom::CorsOriginPatternPtr> patterns;
-  base::RunLoop run_loop;
-  patterns.push_back(network::mojom::CorsOriginPattern::New(
-      "https", "grandchildframe.com", 0,
-      network::mojom::CorsDomainMatchMode::kAllowSubdomains,
-      network::mojom::CorsPortMatchMode::kAllowAnyPort,
-      network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority));
-  CorsOriginPatternSetter::Set(main_rfh()->GetBrowserContext(),
-                               main_rfh()->GetLastCommittedOrigin(),
-                               std::move(patterns), {}, run_loop.QuitClosure());
-  run_loop.Run();
+  AddHostPermissions("grandchildframe.com", main_rfh());
 
   EXPECT_EQ(expected_grandchild_no_permissions_storage_key,
             grandchild_frame->CalculateStorageKey(
@@ -595,37 +721,87 @@ TEST_F(RenderFrameHostImplTest, CalculateStorageKey) {
   // extension rfh has host permissions to`child_frame` calling
   // `CalculateStorageKey` should create a storage key with the `child_origin`
   // as the `top_level_site`.
-  base::RunLoop run_loop_update;
-  std::vector<network::mojom::CorsOriginPatternPtr> patterns2;
-  patterns2.push_back(network::mojom::CorsOriginPattern::New(
-      "https", "childframe.com", 0,
-      network::mojom::CorsDomainMatchMode::kAllowSubdomains,
-      network::mojom::CorsPortMatchMode::kAllowAnyPort,
-      network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority));
-  CorsOriginPatternSetter::Set(
-      main_rfh()->GetBrowserContext(), main_rfh()->GetLastCommittedOrigin(),
-      std::move(patterns2), {}, run_loop_update.QuitClosure());
-  run_loop_update.Run();
+  AddHostPermissions("childframe.com", main_rfh());
 
   // Child host should now have a storage key that is same site and uses the
   // `child_origin` as the `top_level_site`.
   blink::StorageKey expected_child_with_permissions_storage_key =
-      blink::StorageKey::CreateWithOptionalNonce(
+      blink::StorageKey::Create(
           child_frame->GetLastCommittedOrigin(),
-          net::SchemefulSite(child_frame->GetLastCommittedOrigin()), nullptr,
+          net::SchemefulSite(child_frame->GetLastCommittedOrigin()),
           blink::mojom::AncestorChainBit::kSameSite);
   EXPECT_EQ(expected_child_with_permissions_storage_key,
             child_frame->CalculateStorageKey(
                 child_frame->GetLastCommittedOrigin(), nullptr));
 
   blink::StorageKey expected_grandchild_with_permissions_storage_key =
-      blink::StorageKey::CreateWithOptionalNonce(
+      blink::StorageKey::Create(
           grandchild_frame->GetLastCommittedOrigin(),
-          net::SchemefulSite(child_frame->GetLastCommittedOrigin()), nullptr,
+          net::SchemefulSite(child_frame->GetLastCommittedOrigin()),
           blink::mojom::AncestorChainBit::kCrossSite);
   EXPECT_EQ(expected_grandchild_with_permissions_storage_key,
             grandchild_frame->CalculateStorageKey(
                 grandchild_frame->GetLastCommittedOrigin(), nullptr));
+}
+
+// TODO(crbug.com/41483148): Flaky on Linux.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_CalculateStorageKeyFirstPartyOverride \
+  DISABLED_CalculateStorageKeyFirstPartyOverride
+#else
+#define MAYBE_CalculateStorageKeyFirstPartyOverride \
+  CalculateStorageKeyFirstPartyOverride
+#endif
+
+// TODO(crbug.com/40260854): Eventually, this test will be moved to
+// chrome/browser/ so that we no longer need to override the
+// ContentBrowserClient, and we can test using real extension URLs.
+TEST_F(RenderFrameHostImplTest, MAYBE_CalculateStorageKeyFirstPartyOverride) {
+  // Enable third-party storage partitioning.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      net::features::kThirdPartyStoragePartitioning);
+
+  // Temporarily enable FirstPartyOverrideContentBrowserClient. This allows us
+  // to mock ShouldUseFirstPartyStorageKey() to check the origin scheme (as done
+  // in the ChromeContentBrowserClient) rather than indiscriminately return
+  // false (as written in the ContentBrowserClient implementation).
+  FirstPartyOverrideContentBrowserClient modified_client;
+  ContentBrowserClient* regular_client =
+      SetBrowserClientForTesting(&modified_client);
+
+  // Register extension scheme for testing.
+  url::ScopedSchemeRegistryForTests scoped_registry;
+  url::AddStandardScheme("chrome-extension", url::SCHEME_WITH_HOST);
+
+  // Navigate and commit to a non-extension URL.
+  GURL initial_url("https://initial.example.test");
+  NavigationSimulator::CreateRendererInitiated(initial_url, main_rfh())
+      ->Commit();
+
+  // Create a child extension frame and navigate to it.
+  auto* child_frame = static_cast<TestRenderFrameHost*>(
+      content::RenderFrameHostTester::For(main_test_rfh())
+          ->AppendChild("child"));
+
+  // TODO(crbug.com/40260854): once this test is moved to chrome/browser/
+  // replace with a legitimate chrome-extension URL. But for the purposes of
+  // this test, it is sufficient to check that it has a chrome-extension scheme.
+  GURL child_url = GURL("chrome-extension://childframeid");
+  child_frame = static_cast<TestRenderFrameHost*>(
+      NavigationSimulator::NavigateAndCommitFromDocument(child_url,
+                                                         child_frame));
+
+  // Subframes that contain extension URLs should have first-party StorageKeys.
+  EXPECT_EQ(child_frame->GetLastCommittedOrigin().GetURL(), child_url);
+  blink::StorageKey expected_storage_key = blink::StorageKey::CreateFirstParty(
+      child_frame->GetLastCommittedOrigin());
+
+  EXPECT_EQ(expected_storage_key,
+            child_frame->CalculateStorageKey(
+                child_frame->GetLastCommittedOrigin(), /*nonce=*/nullptr));
+
+  SetBrowserClientForTesting(regular_client);
 }
 
 TEST_F(RenderFrameHostImplTest,
@@ -649,25 +825,15 @@ TEST_F(RenderFrameHostImplTest,
                                                          child_frame));
 
   // Give extension host permissions to `child_url`.
-  std::vector<network::mojom::CorsOriginPatternPtr> patterns;
-  base::RunLoop run_loop;
-  patterns.push_back(network::mojom::CorsOriginPattern::New(
-      "https", "childframe.com", 0,
-      network::mojom::CorsDomainMatchMode::kAllowSubdomains,
-      network::mojom::CorsPortMatchMode::kAllowAnyPort,
-      network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority));
-  CorsOriginPatternSetter::Set(main_rfh()->GetBrowserContext(),
-                               main_rfh()->GetLastCommittedOrigin(),
-                               std::move(patterns), {}, run_loop.QuitClosure());
-  run_loop.Run();
+  AddHostPermissions("childframe.com", main_rfh());
 
   // The top level document has host permssions to the child_url so the top
   // level document should be excluded from storage key calculations and a first
   // party, same-site storage key is expected.
   blink::StorageKey expected_child_with_permissions_storage_key =
-      blink::StorageKey::CreateWithOptionalNonce(
+      blink::StorageKey::Create(
           child_frame->GetLastCommittedOrigin(),
-          net::SchemefulSite(child_frame->GetLastCommittedOrigin()), nullptr,
+          net::SchemefulSite(child_frame->GetLastCommittedOrigin()),
           blink::mojom::AncestorChainBit::kSameSite);
   EXPECT_EQ(expected_child_with_permissions_storage_key,
             child_frame->CalculateStorageKey(
@@ -679,17 +845,59 @@ TEST_F(RenderFrameHostImplTest,
   // calculation.
   GURL no_host_permissions_url = GURL("https://noHostPermissions.com/");
   blink::StorageKey expected_storage_key_no_permissions =
-      blink::StorageKey::CreateWithOptionalNonce(
+      blink::StorageKey::Create(
           url::Origin::Create(no_host_permissions_url),
-          net::SchemefulSite(url::Origin::Create(initial_url_ext)), nullptr,
+          net::SchemefulSite(url::Origin::Create(initial_url_ext)),
           blink::mojom::AncestorChainBit::kCrossSite);
   EXPECT_EQ(expected_storage_key_no_permissions,
             child_frame->CalculateStorageKey(
                 url::Origin::Create(no_host_permissions_url), nullptr));
 }
 
+TEST_F(RenderFrameHostImplTest,
+       NewFrameInheritsRuntimeFeatureStateReadContext) {
+  GURL url = GURL("https://a.com");
+  GURL child_url = GURL("https://b.com");
+
+  // Start by giving the main frame a non-default
+  // RuntimeFeatureStateReadContext.
+
+  auto navigation =
+      NavigationSimulator::CreateRendererInitiated(url, main_rfh());
+  navigation->Start();
+
+  NavigationRequest* request =
+      NavigationRequest::From(navigation->GetNavigationHandle());
+
+  request->GetMutableRuntimeFeatureStateContext().SetTestFeatureEnabled(true);
+
+  navigation->Commit();
+
+  EXPECT_TRUE(RuntimeFeatureStateDocumentData::GetForCurrentDocument(main_rfh())
+                  ->runtime_feature_state_read_context()
+                  .IsTestFeatureEnabled());
+
+  // Now add a child and check its RFSRC.
+  auto* child_frame = main_test_rfh()->AppendChild("child");
+  EXPECT_TRUE(
+      RuntimeFeatureStateDocumentData::GetForCurrentDocument(child_frame)
+          ->runtime_feature_state_read_context()
+          .IsTestFeatureEnabled());
+
+  // Navigating the child away should change the RFSRC.
+  auto child_navigation =
+      NavigationSimulator::CreateRendererInitiated(child_url, child_frame);
+  child_navigation->Commit();
+  child_frame = static_cast<TestRenderFrameHost*>(
+      child_navigation->GetFinalRenderFrameHost());
+  EXPECT_FALSE(
+      RuntimeFeatureStateDocumentData::GetForCurrentDocument(child_frame)
+          ->runtime_feature_state_read_context()
+          .IsTestFeatureEnabled());
+}
+
 #if BUILDFLAG(IS_ANDROID)
-class TestWebAuthenticationDelegate : public WebAuthenticationDelegate {
+class TestWebAuthnContentBrowserClientImpl : public ContentBrowserClient {
  public:
   MOCK_METHOD(bool,
               IsSecurityLevelAcceptableForWebAuthn,
@@ -697,26 +905,10 @@ class TestWebAuthenticationDelegate : public WebAuthenticationDelegate {
               ());
 };
 
-class TestWebAuthnContentBrowserClientImpl : public ContentBrowserClient {
- public:
-  explicit TestWebAuthnContentBrowserClientImpl(
-      TestWebAuthenticationDelegate* delegate)
-      : delegate_(delegate) {}
-
-  WebAuthenticationDelegate* GetWebAuthenticationDelegate() override {
-    return delegate_;
-  }
-
- private:
-  raw_ptr<TestWebAuthenticationDelegate> delegate_;
-};
-
 class RenderFrameHostImplWebAuthnTest : public RenderFrameHostImplTest {
  public:
   void SetUp() override {
     RenderFrameHostImplTest::SetUp();
-    browser_client_ = std::make_unique<TestWebAuthnContentBrowserClientImpl>(
-        webauthn_delegate_.get());
     old_browser_client_ = SetBrowserClientForTesting(browser_client_.get());
     contents()->GetController().LoadURLWithParams(
         NavigationController::LoadURLParams(
@@ -730,24 +922,27 @@ class RenderFrameHostImplWebAuthnTest : public RenderFrameHostImplTest {
 
  protected:
   raw_ptr<ContentBrowserClient> old_browser_client_;
-  std::unique_ptr<TestWebAuthnContentBrowserClientImpl> browser_client_;
-  std::unique_ptr<TestWebAuthenticationDelegate> webauthn_delegate_ =
-      std::make_unique<TestWebAuthenticationDelegate>();
+  std::unique_ptr<TestWebAuthnContentBrowserClientImpl> browser_client_ =
+      std::make_unique<TestWebAuthnContentBrowserClientImpl>();
 };
 
 TEST_F(RenderFrameHostImplWebAuthnTest,
        PerformGetAssertionWebAuthSecurityChecks_TLSError) {
   GURL url("https://doofenshmirtz.evil");
   const auto origin = url::Origin::Create(url);
-  EXPECT_CALL(*webauthn_delegate_,
+  EXPECT_CALL(*browser_client_,
               IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
       .WillOnce(testing::Return(false));
-  std::pair<blink::mojom::AuthenticatorStatus, bool> result =
-      main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
-          "doofenshmirtz.evil", url::Origin::Create(url),
-          /*is_payment_credential_get_assertion=*/false,
-          /*remote_desktop_client_override=*/nullptr);
-  EXPECT_EQ(std::get<blink::mojom::AuthenticatorStatus>(result),
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
+      "doofenshmirtz.evil", url::Origin::Create(url),
+      /*is_payment_credential_get_assertion=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(),
             blink::mojom::AuthenticatorStatus::CERTIFICATE_ERROR);
 }
 
@@ -755,115 +950,263 @@ TEST_F(RenderFrameHostImplWebAuthnTest,
        PerformMakeCredentialWebAuthSecurityChecks_TLSError) {
   GURL url("https://doofenshmirtz.evil");
   const auto origin = url::Origin::Create(url);
-  EXPECT_CALL(*webauthn_delegate_,
+  EXPECT_CALL(*browser_client_,
               IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
       .WillOnce(testing::Return(false));
-  blink::mojom::AuthenticatorStatus result =
-      main_test_rfh()->PerformMakeCredentialWebAuthSecurityChecks(
-          "doofenshmirtz.evil", url::Origin::Create(url),
-          /*is_payment_credential_creation=*/false,
-          /*remote_desktop_client_override=*/nullptr);
-  EXPECT_EQ(result, blink::mojom::AuthenticatorStatus::CERTIFICATE_ERROR);
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformMakeCredentialWebAuthSecurityChecks(
+      "doofenshmirtz.evil", url::Origin::Create(url),
+      /*is_payment_credential_creation=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(),
+            blink::mojom::AuthenticatorStatus::CERTIFICATE_ERROR);
 }
 
 TEST_F(RenderFrameHostImplWebAuthnTest,
        PerformGetAssertionWebAuthSecurityChecks_Success) {
   GURL url("https://owca.org");
   const auto origin = url::Origin::Create(url);
-  EXPECT_CALL(*webauthn_delegate_,
+  EXPECT_CALL(*browser_client_,
               IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
       .WillOnce(testing::Return(true));
-  std::pair<blink::mojom::AuthenticatorStatus, bool> result =
-      main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
-          "owca.org", url::Origin::Create(url),
-          /*is_payment_credential_get_assertion=*/false,
-          /*remote_desktop_client_override=*/nullptr);
-  EXPECT_EQ(std::get<blink::mojom::AuthenticatorStatus>(result),
-            blink::mojom::AuthenticatorStatus::SUCCESS);
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformGetAssertionWebAuthSecurityChecks(
+      "owca.org", url::Origin::Create(url),
+      /*is_payment_credential_get_assertion=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::SUCCESS);
 }
 
 TEST_F(RenderFrameHostImplWebAuthnTest,
        PerformMakeCredentialWebAuthSecurityChecks_Success) {
   GURL url("https://owca.org");
   const auto origin = url::Origin::Create(url);
-  EXPECT_CALL(*webauthn_delegate_,
+  EXPECT_CALL(*browser_client_,
               IsSecurityLevelAcceptableForWebAuthn(main_test_rfh(), origin))
       .WillOnce(testing::Return(true));
-  blink::mojom::AuthenticatorStatus result =
-      main_test_rfh()->PerformMakeCredentialWebAuthSecurityChecks(
-          "owca.org", url::Origin::Create(url),
-          /*is_payment_credential_creation=*/false,
-          /*remote_desktop_client_override=*/nullptr);
-  EXPECT_EQ(result, blink::mojom::AuthenticatorStatus::SUCCESS);
+  std::optional<blink::mojom::AuthenticatorStatus> status;
+  main_test_rfh()->PerformMakeCredentialWebAuthSecurityChecks(
+      "owca.org", url::Origin::Create(url),
+      /*is_payment_credential_creation=*/false,
+      /*remote_desktop_client_override_origin=*/std::nullopt,
+      base::BindLambdaForTesting(
+          [&status](blink::mojom::AuthenticatorStatus s, bool is_cross_origin) {
+            status = s;
+          }));
+  EXPECT_EQ(status.value(), blink::mojom::AuthenticatorStatus::SUCCESS);
 }
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
-TEST_F(RenderFrameHostImplTest, NoBeforeUnloadCheckForBrowserInitiated) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kAvoidUnnecessaryBeforeUnloadCheckSync);
-  contents()->GetController().LoadURLWithParams(
-      NavigationController::LoadURLParams(
-          GURL("https://example.com/navigation.html")));
-  EXPECT_FALSE(contents()
-                   ->GetPrimaryMainFrame()
-                   ->is_waiting_for_beforeunload_completion());
-}
+class AvoidUnnecessaryBeforeUnloadCheckSyncTest
+    : public RenderFrameHostImplTest {
+ public:
+  class ForcePostTaskContentBrowserClient : public ContentBrowserClient {
+    bool SupportsAvoidUnnecessaryBeforeUnloadCheckSync() override {
+      return false;
+    }
+  };
 
-TEST_F(RenderFrameHostImplTest,
-       NoBeforeUnloadCheckForBrowserInitiatedSyncTakesPrecedence) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kAvoidUnnecessaryBeforeUnloadCheckSync}, {});
-  contents()->GetController().LoadURLWithParams(
-      NavigationController::LoadURLParams(
-          GURL("https://example.com/navigation.html")));
-  EXPECT_FALSE(contents()
-                   ->GetPrimaryMainFrame()
-                   ->is_waiting_for_beforeunload_completion());
-}
+  // In this function, the following code path will be executed on navigation.
+  //
+  // [AvoidUnnecessaryBeforeUnloadCheckSync disabled]
+  // - Start a browser initiated navigation.
+  // - Run TestRenderFrameHost::SendBeforeUnload()
+  // - Run on_sendbeforeunload_begin_ closure
+  // - Run RenderFrameHostImpl::SendBeforeUnload() => Post a task
+  // - Run on_sendbeforeunload_end_ closure
+  //
+  // (In the posted task)
+  // - Run RenderFrameHostImpl::ProcessBeforeUnloadCompleted()
+  // - Run on_process_before_unload_completed_for_testing_ closure
+  //
+  // [AvoidUnnecessaryBeforeUnloadCheckSync + `kWithSendBeforeUnload`]
+  // - Start a browser initiated navigation.
+  // - Run TestRenderFrameHost::SendBeforeUnload()
+  // - Run on_sendbeforeunload_begin_ closure
+  // - Run RenderFrameHostImpl::SendBeforeUnload()
+  // - Run RenderFrameHostImpl::ProcessBeforeUnloadCompleted()
+  // - Run on_process_before_unload_completed_for_testing_ closure
+  // - Run on_sendbeforeunload_end_ closure
+  //
+  // [AvoidUnnecessaryBeforeUnloadCheckSync + `kWithoutSendBeforeUnload`]
+  // - Start a browser initiated navigation.
+  // - (the rest will be skipped)
+  //
+  // - expect_beforeunload_processed_on_sendbeforeunload_stack argument checks
+  //   if ProcessBeforeUnloadCompleted() is called without posting a task by
+  //   checking it in on_sendbeforeunload_end_ closure. This argument is
+  //   optional because this argument doesn't make sense when SendBeforeUnload()
+  //   and ProcessBeforeUnloadCompleted are not called at all.
+  //
+  // - expect_to_run_sendbeforeunload argument checks if both
+  //   SendBeforeUnload() and ProcessBeforeUnloadCompleted() are called or not.
+  void TestBeforeUnloadBehaviorOnNavigation(
+      std::optional<bool>
+          expect_beforeunload_processed_on_sendbeforeunload_stack,
+      bool expect_to_run_sendbeforeunload,
+      const base::Location& location = FROM_HERE) {
+    TestRenderFrameHost* rfh = contents()->GetPrimaryMainFrame();
+    bool beforeunload_processed = false;
+    bool run_sendbeforeunload = false;
+    // The following callback is called when processing beforeunload is
+    // completed.
+    rfh->set_on_process_before_unload_completed_for_testing(
+        base::BindLambdaForTesting([&]() { beforeunload_processed = true; }));
+    // The following callback is called when SendBeforeUnload() is about to
+    // start.
+    rfh->set_on_sendbeforeunload_begin(base::BindLambdaForTesting([&]() {
+      EXPECT_FALSE(beforeunload_processed) << location.ToString();
+    }));
+    // The following callback is called when SendBeforeUnload() is about to end.
+    rfh->set_on_sendbeforeunload_end(base::BindLambdaForTesting([&]() {
+      EXPECT_EQ(beforeunload_processed,
+                *expect_beforeunload_processed_on_sendbeforeunload_stack)
+          << location.ToString();
+      run_sendbeforeunload = true;
+    }));
 
-// ContentBrowserClient::SupportsAvoidUnnecessaryBeforeUnloadCheckSync() is
-// android specific.
-#if BUILDFLAG(IS_ANDROID)
-class TestContentBrowserClientImpl : public ContentBrowserClient {
-  bool SupportsAvoidUnnecessaryBeforeUnloadCheckSync() override {
-    return false;
+    auto simulator = NavigationSimulatorImpl::CreateBrowserInitiated(
+        GURL("https://example.com/navigation.html"), contents());
+    simulator->Start();
+    simulator->Wait();
+
+    EXPECT_EQ(beforeunload_processed, expect_to_run_sendbeforeunload)
+        << location.ToString();
+    EXPECT_EQ(run_sendbeforeunload, expect_to_run_sendbeforeunload)
+        << location.ToString();
   }
 };
 
-TEST_F(RenderFrameHostImplTest,
-       SupportsAvoidUnnecessaryBeforeUnloadCheckSyncReturnsFalse) {
-  TestContentBrowserClientImpl browser_client;
-  ContentBrowserClient* old_browser_client =
-      SetBrowserClientForTesting(&browser_client);
+TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest, EnabledWithSendBeforeUnload) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kAvoidUnnecessaryBeforeUnloadCheckSync);
-  contents()->GetController().LoadURLWithParams(
-      NavigationController::LoadURLParams(
-          GURL("https://example.com/navigation.html")));
-  // Should be waiting on beforeunload as
-  // SupportsAvoidUnnecessaryBeforeUnloadCheckSync() takes
-  // precedence.
-  EXPECT_TRUE(contents()
-                  ->GetPrimaryMainFrame()
-                  ->is_waiting_for_beforeunload_completion());
-  SetBrowserClientForTesting(old_browser_client);
-}
-#endif
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
+                             {{features::
+                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
+                                       .name,
+                               "WithSendBeforeUnload"}}}},
+      /*disabled_features=*/{});
 
-TEST_F(RenderFrameHostImplTest, BeforeUnloadCheckForBrowserInitiated) {
+  TestBeforeUnloadBehaviorOnNavigation(
+      /*expect_beforeunload_processed_on_sendbeforeunload_stack=*/true,
+      /*expect_to_run_sendbeforeunload=*/true);
+}
+
+TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest, Disabled) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitAndDisableFeature(
       features::kAvoidUnnecessaryBeforeUnloadCheckSync);
-  contents()->GetController().LoadURLWithParams(
-      NavigationController::LoadURLParams(
-          GURL("https://example.com/navigation.html")));
-  EXPECT_TRUE(contents()
-                  ->GetPrimaryMainFrame()
-                  ->is_waiting_for_beforeunload_completion());
+
+  TestBeforeUnloadBehaviorOnNavigation(
+      /*expect_beforeunload_processed_on_sendbeforeunload_stack=*/false,
+      /*expect_to_run_sendbeforeunload=*/true);
+}
+
+TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest,
+       EnabledWithSendBeforeUnloadButBrowserClientProhibits) {
+  ForcePostTaskContentBrowserClient force_post_task_content_browser_client;
+  ContentBrowserClient* old_browser_client =
+      SetBrowserClientForTesting(&force_post_task_content_browser_client);
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
+                             {{features::
+                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
+                                       .name,
+                               "WithSendBeforeUnload"}}}},
+      /*disabled_features=*/{});
+
+  // SupportsAvoidUnnecessaryBeforeUnloadCheckSync() takes precedence over
+  // enabling the kAvoidUnnecessaryBeforeUnloadCheckSync feature.
+  TestBeforeUnloadBehaviorOnNavigation(
+      /*expect_beforeunload_processed_on_sendbeforeunload_stack=*/false,
+      /*expect_to_run_sendbeforeunload=*/true);
+
+  SetBrowserClientForTesting(old_browser_client);
+}
+
+TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest,
+       EnabledWithoutSendBeforeUnload) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
+                             {{features::
+                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
+                                       .name,
+                               "WithoutSendBeforeUnload"}}}},
+      /*disabled_features=*/{});
+
+  TestBeforeUnloadBehaviorOnNavigation(
+      /*expect_beforeunload_processed_on_send_beforeunload_stack=*/std::nullopt,
+      /*expect_to_run_send_beforeunload=*/false);
+}
+
+TEST_F(AvoidUnnecessaryBeforeUnloadCheckSyncTest,
+       EnabledWithoutSendBeforeUnloadButBrowserClientProhibits) {
+  ForcePostTaskContentBrowserClient force_post_task_content_browser_client;
+  ContentBrowserClient* old_browser_client =
+      SetBrowserClientForTesting(&force_post_task_content_browser_client);
+
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      /*enabled_features=*/{{features::kAvoidUnnecessaryBeforeUnloadCheckSync,
+                             {{features::
+                                   kAvoidUnnecessaryBeforeUnloadCheckSyncMode
+                                       .name,
+                               "WithoutSendBeforeUnload"}}}},
+      /*disabled_features=*/{});
+
+  // SupportsAvoidUnnecessaryBeforeUnloadCheckSync() takes precedence over
+  // enabling the kAvoidUnnecessaryBeforeUnloadCheckSync feature.
+  TestBeforeUnloadBehaviorOnNavigation(
+      /*expect_beforeunload_processed_on_send_beforeunload_stack=*/false,
+      /*expect_to_run_send_beforeunload=*/true);
+
+  SetBrowserClientForTesting(old_browser_client);
+}
+
+class SkipBeforeUnloadDialogAndNavigateContentBrowserClient
+    : public ContentBrowserClient {
+ public:
+  bool ShouldSkipBeforeUnloadDialog(content::RenderFrameHost* rfh) override {
+    called_ = true;
+    return true;
+  }
+
+  bool called() const { return called_; }
+
+ private:
+  bool called_ = false;
+};
+
+TEST_F(RenderFrameHostImplTest, RunBeforeUnloadConfirm_SkipDialogAndNavigate) {
+  SkipBeforeUnloadDialogAndNavigateContentBrowserClient skip_client;
+  ContentBrowserClient* old_browser_client =
+      SetBrowserClientForTesting(&skip_client);
+
+  TestRenderFrameHost* rfh = contents()->GetPrimaryMainFrame();
+
+  bool callback_ran = false;
+  rfh->RunBeforeUnloadConfirm(
+      /*is_reload=*/false, base::BindLambdaForTesting([&](bool success) {
+        EXPECT_TRUE(success);
+        callback_ran = true;
+      }));
+
+  EXPECT_TRUE(callback_ran);
+  EXPECT_TRUE(skip_client.called());
+
+  SetBrowserClientForTesting(old_browser_client);
 }
 
 class RenderFrameHostImplThirdPartyStorageTest
@@ -886,6 +1229,49 @@ class RenderFrameHostImplThirdPartyStorageTest
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
+
+class RenderFrameHostImplLazyBrowserInterfaceBrokerTest
+    : public RenderFrameHostImplTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  RenderFrameHostImplLazyBrowserInterfaceBrokerTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(features::kLazyBrowserInterfaceBroker);
+    } else {
+      feature_list_.InitAndDisableFeature(
+          features::kLazyBrowserInterfaceBroker);
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Tests that kLazyBrowserInterfaceBroker controls whether the
+// RenderFrameHostImpl is constructed with a BrokerHolder. When the flag is
+// enabled the test also confirms that lazy initialization works correctly.
+TEST_P(RenderFrameHostImplLazyBrowserInterfaceBrokerTest,
+       LazyBrowserInterfaceBroker) {
+  scoped_refptr<SiteInstance> instance =
+      SiteInstance::Create(GetBrowserContext());
+  std::unique_ptr<TestWebContents> web_contents =
+      TestWebContents::Create(GetBrowserContext(), std::move(instance));
+  RenderFrameHostImpl* rfh = web_contents->GetPrimaryMainFrame();
+  if (GetParam()) {
+    EXPECT_FALSE(rfh->has_broker_holder_for_testing());
+    mojo::Remote<blink::mojom::BrowserInterfaceBroker> broker_remote;
+    mojo::PendingReceiver<blink::mojom::BrowserInterfaceBroker>
+        broker_receiver = broker_remote.BindNewPipeAndPassReceiver();
+    rfh->BindBrowserInterfaceBrokerReceiver(std::move(broker_receiver));
+    EXPECT_TRUE(rfh->has_broker_holder_for_testing());
+  } else {
+    EXPECT_TRUE(rfh->has_broker_holder_for_testing());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         RenderFrameHostImplLazyBrowserInterfaceBrokerTest,
+                         testing::Bool());
 
 INSTANTIATE_TEST_SUITE_P(
     All,
@@ -911,23 +1297,180 @@ TEST_P(RenderFrameHostImplThirdPartyStorageTest,
 
   // Top level storage key should not change if third party partitioning is on
   // or off
-  EXPECT_EQ(blink::StorageKey(url::Origin::Create(initial_url)),
-            main_test_rfh()->storage_key());
+  EXPECT_EQ(
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(initial_url)),
+      main_test_rfh()->GetStorageKey());
 
   if (ThirdPartyStoragePartitioningEnabled()) {
     // child frame storage key should contain child_origin + top_level_origin if
     // third party partitioning is on.
-    EXPECT_EQ(blink::StorageKey::CreateWithOptionalNonce(
+    EXPECT_EQ(blink::StorageKey::Create(
                   url::Origin::Create(child_url),
-                  net::SchemefulSite(url::Origin::Create(initial_url)), nullptr,
+                  net::SchemefulSite(url::Origin::Create(initial_url)),
                   blink::mojom::AncestorChainBit::kCrossSite),
-              child_frame->storage_key());
+              child_frame->GetStorageKey());
   } else {
     // child frame storage key should only be partitioned by child origin if
     // third party partitioning is off.
-    EXPECT_EQ(blink::StorageKey(url::Origin::Create(child_url)),
-              child_frame->storage_key());
+    EXPECT_EQ(
+        blink::StorageKey::CreateFirstParty(url::Origin::Create(child_url)),
+        child_frame->GetStorageKey());
   }
+}
+
+namespace {
+
+class MockWebContentsDelegate : public WebContentsDelegate {
+ public:
+  MOCK_METHOD(void, CloseContents, (WebContents*));
+  MOCK_METHOD(void,
+              OnTextCopiedToClipboard,
+              (RenderFrameHost*, std::u16string));
+};
+
+}  // namespace
+
+// Ensure that a close request from the renderer process is ignored if a
+// navigation causes a different RenderFrameHost to commit first. See
+// https://crbug.com/1406023.
+TEST_F(RenderFrameHostImplTest,
+       RendererInitiatedCloseIsCancelledIfPageIsntPrimary) {
+  MockWebContentsDelegate delegate;
+  contents()->SetDelegate(&delegate);
+
+  RenderFrameHostImpl* rfh = main_test_rfh();
+  EXPECT_CALL(delegate, CloseContents(contents())).Times(0);
+
+  // Have the renderer request to close the page.
+  rfh->ClosePage(RenderFrameHostImpl::ClosePageSource::kRenderer);
+
+  // The close timeout should be running.
+  EXPECT_TRUE(rfh->close_timeout_ && rfh->close_timeout_->IsRunning());
+
+  // Simulate the rfh going into the back-forward cache before the close timeout
+  // fires.
+  rfh->lifecycle_state_ =
+      RenderFrameHostImpl::LifecycleStateImpl::kInBackForwardCache;
+
+  // Simulate the close timer firing.
+  rfh->ClosePageTimeout(RenderFrameHostImpl::ClosePageSource::kRenderer);
+
+  // The page should not close since it's no longer the primary page.
+  testing::Mock::VerifyAndClearExpectations(&delegate);
+}
+
+// Ensure that a close request from the browser process cannot be ignored even
+// if a navigation causes a different RenderFrameHost to commit first. See
+// https://crbug.com/1406023.
+TEST_F(RenderFrameHostImplTest,
+       BrowserInitiatedCloseIsNotCancelledIfPageIsntPrimary) {
+  MockWebContentsDelegate delegate;
+  contents()->SetDelegate(&delegate);
+
+  RenderFrameHostImpl* rfh = main_test_rfh();
+  EXPECT_CALL(delegate, CloseContents(contents()));
+
+  // Have the browser request to close the page.
+  rfh->ClosePage(RenderFrameHostImpl::ClosePageSource::kBrowser);
+
+  // The close timeout should be running.
+  EXPECT_TRUE(rfh->close_timeout_ && rfh->close_timeout_->IsRunning());
+
+  // Simulate the rfh going into the back-forward cache before the close timeout
+  // fires.
+  rfh->lifecycle_state_ =
+      RenderFrameHostImpl::LifecycleStateImpl::kInBackForwardCache;
+
+  // Simulate the close timer firing.
+  rfh->ClosePageTimeout(RenderFrameHostImpl::ClosePageSource::kBrowser);
+
+  // The page should close regardless of it not being primary since the browser
+  // requested it.
+  testing::Mock::VerifyAndClearExpectations(&delegate);
+}
+
+// A mock WebContentsObserver for listening to text copy events.
+class TextCopiedEventObserver : public WebContentsObserver {
+ public:
+  explicit TextCopiedEventObserver(WebContents* web_contents)
+      : WebContentsObserver(web_contents) {}
+
+  MOCK_METHOD(void,
+              OnTextCopiedToClipboard,
+              (RenderFrameHost*, const std::u16string&),
+              (override));
+};
+
+// Test that the WebContentObserver is notified when text is copied to the
+// clipboard for a RenderFrameHost.
+TEST_F(RenderFrameHostImplTest, OnTextCopiedToClipboard) {
+  testing::StrictMock<TextCopiedEventObserver> observer(contents());
+  std::u16string copied_text = u"copied_text";
+
+  RenderFrameHostImpl* rfh = main_test_rfh();
+  EXPECT_CALL(observer, OnTextCopiedToClipboard(rfh, copied_text));
+
+  rfh->OnTextCopiedToClipboard(copied_text);
+}
+
+// Test if `LoadedWithCacheControlNoStoreHeader()` behaves
+// as expected.
+TEST_F(RenderFrameHostImplTest, LoadedWithCacheControlNoStoreHeader) {
+  TestRenderFrameHost* rfh = main_test_rfh();
+  // In the default state, `LoadedWithCacheControlNoStoreHeader()`
+  // will return false.
+  ASSERT_FALSE(rfh->LoadedWithCacheControlNoStoreHeader());
+  // Register the `kMainResourceHasCacheControlNoStore` feature and
+  // `LoadedWithCacheControlNoStoreHeader()` will return true.
+  rfh->OnBackForwardCacheDisablingStickyFeatureUsed(
+      blink::scheduler::WebSchedulerTrackedFeature::
+          kMainResourceHasCacheControlNoStore);
+  ASSERT_TRUE(rfh->LoadedWithCacheControlNoStoreHeader());
+  // Simulate a same RFH navigation and the
+  // `LoadedWithCacheControlNoStoreHeader()` should return false because the
+  // registered feature is reset.
+  NavigationSimulator::NavigateAndCommitFromDocument(GURL("http://foo"), rfh);
+  ASSERT_EQ(main_test_rfh(), rfh);
+  ASSERT_FALSE(main_test_rfh()->LoadedWithCacheControlNoStoreHeader());
+}
+
+class MediaStreamCaptureObserver : public WebContentsObserver {
+ public:
+  explicit MediaStreamCaptureObserver(WebContents* web_contents)
+      : WebContentsObserver(web_contents) {}
+
+  MOCK_METHOD(void,
+              OnFrameIsCapturingMediaStreamChanged,
+              (RenderFrameHost*, bool),
+              (override));
+};
+
+TEST_F(RenderFrameHostImplTest, CapturedMediaStreamAddedRemoved) {
+  testing::StrictMock<MediaStreamCaptureObserver> observer(contents());
+
+  TestRenderFrameHost* main_rfh = contents()->GetPrimaryMainFrame();
+
+  // Calling OnMediaStreamAdded for the first time will cause a notification.
+  EXPECT_CALL(observer, OnFrameIsCapturingMediaStreamChanged(main_rfh, true));
+  main_rfh->OnMediaStreamAdded(
+      RenderFrameHostImpl::MediaStreamType::kCapturingMediaStream);
+
+  // Calling it again will not result in a notification (verified by the
+  // StrictMock).
+  main_rfh->OnMediaStreamAdded(
+      RenderFrameHostImpl::MediaStreamType::kCapturingMediaStream);
+
+  // Calling OnMediaStreamRemoved to cancel out one of the OnMediaStreamAdded
+  // calls. Overall, the frame is still capturing at least one media stream so
+  // there is no notifications.
+  main_rfh->OnMediaStreamRemoved(
+      RenderFrameHostImpl::MediaStreamType::kCapturingMediaStream);
+
+  // Cancelling the first OnMediaStreamAdded call. This changes the state of the
+  // frame and thus cause a notification.
+  EXPECT_CALL(observer, OnFrameIsCapturingMediaStreamChanged(main_rfh, false));
+  main_rfh->OnMediaStreamRemoved(
+      RenderFrameHostImpl::MediaStreamType::kCapturingMediaStream);
 }
 
 }  // namespace content

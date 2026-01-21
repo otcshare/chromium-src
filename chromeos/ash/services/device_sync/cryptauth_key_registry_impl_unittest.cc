@@ -4,15 +4,12 @@
 
 #include "chromeos/ash/services/device_sync/cryptauth_key_registry_impl.h"
 
-#include "base/containers/contains.h"
 #include "chromeos/ash/services/device_sync/cryptauth_enrollment_constants.h"
 #include "chromeos/ash/services/device_sync/pref_names.h"
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace ash {
-
-namespace device_sync {
+namespace ash::device_sync {
 
 class DeviceSyncCryptAuthKeyRegistryImplTest : public testing::Test {
  public:
@@ -32,7 +29,7 @@ class DeviceSyncCryptAuthKeyRegistryImplTest : public testing::Test {
   }
 
   // Verify that changing the in-memory key bundle map updates the pref.
-  void VerifyPrefValue(const base::Value& expected_dict) {
+  void VerifyPrefValue(const base::Value::Dict& expected_dict) {
     const base::Value::Dict& dict =
         pref_service_.GetDict(prefs::kCryptAuthKeyRegistry);
     EXPECT_EQ(expected_dict, dict);
@@ -90,8 +87,8 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest, AddKey) {
   expected_bundle.AddKey(sym_key);
   EXPECT_EQ(expected_bundle, *key_bundle);
 
-  base::Value expected_dict(base::Value::Type::DICTIONARY);
-  expected_dict.SetKey(
+  base::Value::Dict expected_dict;
+  expected_dict.Set(
       CryptAuthKeyBundle::KeyBundleNameEnumToString(expected_bundle.name()),
       expected_bundle.AsDictionary());
   VerifyPrefValue(expected_dict);
@@ -110,7 +107,7 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest, AddKey) {
   ASSERT_TRUE(active_key);
   EXPECT_EQ(asym_key, *active_key);
 
-  expected_dict.SetKey(
+  expected_dict.Set(
       CryptAuthKeyBundle::KeyBundleNameEnumToString(expected_bundle.name()),
       expected_bundle.AsDictionary());
   VerifyPrefValue(expected_dict);
@@ -140,8 +137,8 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest, SetActiveKey) {
   expected_bundle.AddKey(sym_key);
   asym_key.set_status(CryptAuthKey::Status::kInactive);
   expected_bundle.AddKey(asym_key);
-  base::Value expected_dict(base::Value::Type::DICTIONARY);
-  expected_dict.SetKey(
+  base::Value::Dict expected_dict;
+  expected_dict.Set(
       CryptAuthKeyBundle::KeyBundleNameEnumToString(expected_bundle.name()),
       expected_bundle.AsDictionary());
   VerifyPrefValue(expected_dict);
@@ -166,8 +163,8 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest, DeactivateKeys) {
   expected_bundle.AddKey(sym_key);
   asym_key.set_status(CryptAuthKey::Status::kInactive);
   expected_bundle.AddKey(asym_key);
-  base::Value expected_dict(base::Value::Type::DICTIONARY);
-  expected_dict.SetKey(
+  base::Value::Dict expected_dict;
+  expected_dict.Set(
       CryptAuthKeyBundle::KeyBundleNameEnumToString(expected_bundle.name()),
       expected_bundle.AsDictionary());
   VerifyPrefValue(expected_dict);
@@ -189,14 +186,14 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest, DeleteKey) {
       key_registry()->GetKeyBundle(CryptAuthKeyBundle::Name::kLegacyAuthzenKey);
   ASSERT_TRUE(key_bundle);
 
-  EXPECT_FALSE(base::Contains(key_bundle->handle_to_key_map(), "sym-handle"));
-  EXPECT_TRUE(base::Contains(key_bundle->handle_to_key_map(), "asym-handle"));
+  EXPECT_FALSE(key_bundle->handle_to_key_map().contains("sym-handle"));
+  EXPECT_TRUE(key_bundle->handle_to_key_map().contains("asym-handle"));
 
   CryptAuthKeyBundle expected_bundle(
       CryptAuthKeyBundle::Name::kLegacyAuthzenKey);
   expected_bundle.AddKey(asym_key);
-  base::Value expected_dict(base::Value::Type::DICTIONARY);
-  expected_dict.SetKey(
+  base::Value::Dict expected_dict;
+  expected_dict.Set(
       CryptAuthKeyBundle::KeyBundleNameEnumToString(expected_bundle.name()),
       expected_bundle.AsDictionary());
   VerifyPrefValue(expected_dict);
@@ -224,8 +221,8 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest, SetKeyDirective) {
       CryptAuthKeyBundle::Name::kLegacyAuthzenKey);
   expected_bundle.AddKey(sym_key);
   expected_bundle.set_key_directive(key_directive);
-  base::Value expected_dict(base::Value::Type::DICTIONARY);
-  expected_dict.SetKey(
+  base::Value::Dict expected_dict;
+  expected_dict.Set(
       CryptAuthKeyBundle::KeyBundleNameEnumToString(expected_bundle.name()),
       expected_bundle.AsDictionary());
   VerifyPrefValue(expected_dict);
@@ -270,6 +267,4 @@ TEST_F(DeviceSyncCryptAuthKeyRegistryImplTest,
   EXPECT_EQ(expected_bundle_legacy_authzen_key, *key_bundle_legacy_authzen_key);
 }
 
-}  // namespace device_sync
-
-}  // namespace ash
+}  // namespace ash::device_sync

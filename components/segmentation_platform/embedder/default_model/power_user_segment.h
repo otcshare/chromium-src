@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,47 @@ struct Config;
 
 // Segmentation Chrome Power user model provider. Provides a default model and
 // metadata for the Power user optimization target.
-class PowerUserSegment : public ModelProvider {
+class PowerUserSegment : public DefaultModelProvider {
  public:
+  enum Label {
+    kLabelUnknown = 0,
+    kLabelNone = 1,
+    kLabelLow = 2,
+    kLabelMedium = 3,
+    kLabelHigh = 4,
+    kLabelCount
+  };
+  enum Feature {
+    kFeatureDownloadStartPerProfileType,
+    kFeatureMobileMenuDownloadManager,
+    kFeatureMobileMenuDownloadPage,
+    kFeatureMobileTabSwitched,
+    kFeatureMobileMenuRequestDesktopSite,
+    kFeatureMobileMenuHistory,
+    kFeatureMobileMenuSettings,
+    kFeatureSharingHubAndroidSendTabToSelfSelected,
+    kFeatureMobileMenuShare,
+    kFeatureMobileMenuAddToBookmarks,
+    kFeatureMobileMenuAllBookmarks,
+    kFeatureMobileOmniboxVoiceSearch,
+    kFeatureMediaControlsCast,
+    kFeatureMediaControlsCastOverlay,
+    kFeatureIncognitoModeStarted,
+    kFeatureAutofillKeyMetricsFillingAcceptanceAddress,
+    kFeatureAutofillKeyMetricsFillingAcceptanceCreditCard,
+    kFeatureMediaOutputStreamDuration,
+    kFeaturePasswordManagerFillingSource,
+    kFeatureMediaInputStreamDuration,
+    kFeatureUMAProfileSignInStatusV2,
+    kFeatureUMAProfileSyncStatusV2,
+    kFeatureAndroidPhotoPickerDiaglogAction,
+    kFeatureDataUseTrafficSizeUserUpstreamForegroundNotCellular,
+    kFeatureDataUseTrafficSizeUserUpstreamForegroundCellular,
+    kFeatureTabGroupCreatedOpenInNewTab,
+    kFeatureSessionTotalDuration,
+    kFeatureCount
+  };
+
   PowerUserSegment();
   ~PowerUserSegment() override = default;
 
@@ -23,17 +62,11 @@ class PowerUserSegment : public ModelProvider {
 
   static std::unique_ptr<Config> GetConfig();
 
-  // Returns the name of the subsegment for the given segment and the
-  // `subsegment_rank`. The `subsegment_rank` should be computed based on the
-  // subsegment discrete mapping in the model metadata.
-  static absl::optional<std::string> GetSubsegmentName(int subsegment_rank);
-
   // ModelProvider implementation.
-  void InitAndFetchModel(
-      const ModelUpdatedCallback& model_updated_callback) override;
+  std::unique_ptr<ModelConfig> GetModelConfig() override;
+
   void ExecuteModelWithInput(const std::vector<float>& inputs,
                              ExecutionCallback callback) override;
-  bool ModelAvailable() override;
 };
 
 }  // namespace segmentation_platform

@@ -13,18 +13,18 @@
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/trace_event/typed_macros.h"
 #include "build/build_config.h"
-#include "components/tracing/common/trace_startup_config.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "content/browser/tracing/startup_tracing_controller.h"
-#include "content/browser/tracing/tracing_controller_impl.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "services/tracing/perfetto/privacy_filtering_check.h"
-#include "services/tracing/public/cpp/perfetto/trace_event_data_source.h"
 #include "services/tracing/public/cpp/trace_startup.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
+#include "third_party/perfetto/include/perfetto/tracing/tracing.h"
 
 namespace content {
 
@@ -89,38 +89,42 @@ class LargeTraceEventData : public base::trace_event::ConvertableToTraceFormat {
 // StartupTraceWriter, which Perfetto will then have to sync copy into
 // the SMB once the full tracing service starts up. This is to catch common
 // deadlocks.
-IN_PROC_BROWSER_TEST_F(StartupTracingInProcessTest, TestFilledStartupBuffer) {
+// TODO(crbug.com/330909115): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_TestFilledStartupBuffer DISABLED_TestFilledStartupBuffer
+#else
+#define MAYBE_TestFilledStartupBuffer TestFilledStartupBuffer
+#endif
+IN_PROC_BROWSER_TEST_F(StartupTracingInProcessTest,
+                       MAYBE_TestFilledStartupBuffer) {
   auto config = tracing::TraceStartupConfig::GetInstance()
-                    ->GetDefaultBrowserStartupConfig();
-  config.SetTraceBufferSizeInEvents(0);
-  config.SetTraceBufferSizeInKb(0);
+                    .GetDefaultBackgroundStartupConfig();
 
-  CHECK(tracing::EnableStartupTracingForProcess(
-      config,
-      /*privacy_filtering_enabled=*/false));
+  perfetto::Tracing::SetupStartupTracingOpts opts;
+  opts.timeout_ms = tracing::kStartupTracingTimeoutMs;
+  opts.backend = perfetto::kCustomBackend;
+
+  perfetto::Tracing::SetupStartupTracingBlocking(config, opts);
 
   for (int i = 0; i < 1024; ++i) {
     auto data = std::make_unique<LargeTraceEventData>();
     TRACE_EVENT1("toplevel", "bar", "data", std::move(data));
   }
 
-  config.SetTraceBufferSizeInKb(32);
-
   base::RunLoop wait_for_tracing;
-  TracingControllerImpl::GetInstance()->StartTracing(
-      config, wait_for_tracing.QuitClosure());
+  auto session =
+      perfetto::Tracing::NewTrace(perfetto::BackendType::kCustomBackend);
+  session->Setup(config);
+  session->SetOnStartCallback(
+      [&wait_for_tracing]() { wait_for_tracing.Quit(); });
+  session->Start();
   wait_for_tracing.Run();
 
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
   base::RunLoop wait_for_stop;
-  TracingControllerImpl::GetInstance()->StopTracing(
-      TracingController::CreateStringEndpoint(base::BindOnce(
-          [](base::OnceClosure quit_callback,
-             std::unique_ptr<std::string> data) {
-            std::move(quit_callback).Run();
-          },
-          wait_for_stop.QuitClosure())));
+  session->SetOnStopCallback([&wait_for_stop]() { wait_for_stop.Quit(); });
+  session->Stop();
   wait_for_stop.Run();
 }
 
@@ -276,7 +280,8 @@ class StartupTracingTest
         << "Failed to read file " << path;
 
     if (output_type == OutputType::kJSON) {
-      EXPECT_TRUE(base::JSONReader::Read(trace));
+      EXPECT_TRUE(
+          base::JSONReader::Read(trace, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
     }
 
     // Both proto and json should have the trace event name recorded somewhere
@@ -322,7 +327,13 @@ INSTANTIATE_TEST_SUITE_P(
             OutputLocation::kDirectoryWithDefaultBasename,
             OutputLocation::kDirectoryWithBasenameUpdatedBeforeStop)));
 
-IN_PROC_BROWSER_TEST_P(StartupTracingTest, DISABLED_TestEnableTracing) {
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_TestEnableTracing DISABLED_TestEnableTracing
+#else
+#define MAYBE_TestEnableTracing TestEnableTracing
+#endif
+IN_PROC_BROWSER_TEST_P(StartupTracingTest, MAYBE_TestEnableTracing) {
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
   if (GetOutputLocation() ==
@@ -354,14 +365,26 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Values(OutputType::kJSON, OutputType::kProto),
         testing::Values(OutputLocation::kDirectoryWithDefaultBasename)));
 
-IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, DISABLED_StopOnUIThread) {
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_StopOnUIThread DISABLED_StopOnUIThread
+#else
+#define MAYBE_StopOnUIThread StopOnUIThread
+#endif
+IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, MAYBE_StopOnUIThread) {
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
   StartupTracingController::EmergencyStop();
   CheckOutput(GetExpectedPath(), GetOutputType());
 }
 
-IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, DISABLED_StopOnThreadPool) {
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_StopOnThreadPool DISABLED_StopOnThreadPool
+#else
+#define MAYBE_StopOnThreadPool StopOnThreadPool
+#endif
+IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, MAYBE_StopOnThreadPool) {
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
   auto expected_path = GetExpectedPath();
@@ -378,8 +401,13 @@ IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, DISABLED_StopOnThreadPool) {
   run_loop.Run();
 }
 
-IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest,
-                       DISABLED_StopOnThreadPoolTwice) {
+// TODO(crbug.com/40900782): Re-enable this test.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_StopOnThreadPoolTwice DISABLED_StopOnThreadPoolTwice
+#else
+#define MAYBE_StopOnThreadPoolTwice StopOnThreadPoolTwice
+#endif
+IN_PROC_BROWSER_TEST_P(EmergencyStopTracingTest, MAYBE_StopOnThreadPoolTwice) {
   EXPECT_TRUE(NavigateToURL(shell(), GetTestUrl("", "title1.html")));
 
   auto expected_path = GetExpectedPath();

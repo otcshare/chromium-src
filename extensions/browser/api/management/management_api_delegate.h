@@ -5,14 +5,18 @@
 #ifndef EXTENSIONS_BROWSER_API_MANAGEMENT_MANAGEMENT_API_DELEGATE_H_
 #define EXTENSIONS_BROWSER_API_MANAGEMENT_MANAGEMENT_API_DELEGATE_H_
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/uninstall_reason.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/management.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
+#include "extensions/common/extension_id.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class BrowserContext;
@@ -25,7 +29,6 @@ class Extension;
 class ExtensionPrefs;
 class ManagementCreateAppShortcutFunction;
 class ManagementGenerateAppForLinkFunction;
-class ManagementGetPermissionWarningsByManifestFunction;
 class ManagementUninstallFunctionBase;
 
 // Manages the lifetime of the install prompt.
@@ -54,9 +57,6 @@ class ManagementAPIDelegate {
  public:
   virtual ~ManagementAPIDelegate() {}
 
-  using AndroidAppInstallStatusCallback = base::OnceCallback<void(bool)>;
-  using InstallAndroidAppCallback = base::OnceCallback<void(bool)>;
-
   enum class InstallOrLaunchWebAppResult {
     kSuccess,
     kInvalidWebApp,
@@ -65,8 +65,9 @@ class ManagementAPIDelegate {
   using InstallOrLaunchWebAppCallback =
       base::OnceCallback<void(InstallOrLaunchWebAppResult)>;
 
-  // Launches the app |extension|.
-  virtual void LaunchAppFunctionDelegate(
+  // Launches the app `extension`. Returns `false` if the launch was blocked due
+  // to chrome apps deprecation, and `true` if it succeeded.
+  virtual bool LaunchAppFunctionDelegate(
       const Extension* extension,
       content::BrowserContext* context) const = 0;
 
@@ -77,12 +78,6 @@ class ManagementAPIDelegate {
   virtual LaunchType GetLaunchType(const ExtensionPrefs* prefs,
                                    const Extension* extension) const = 0;
 
-  // Parses the manifest and calls back the
-  // ManagementGetPermissionWarningsByManifestFunction.
-  virtual void GetPermissionWarningsByManifestFunctionDelegate(
-      ManagementGetPermissionWarningsByManifestFunction* function,
-      const std::string& manifest_str) const = 0;
-
   // Used to show a dialog prompt in chrome when management.setEnabled extension
   // function is called.
   virtual std::unique_ptr<InstallPromptDelegate> SetEnabledFunctionDelegate(
@@ -91,19 +86,19 @@ class ManagementAPIDelegate {
       const Extension* extension,
       base::OnceCallback<void(bool)> callback) const = 0;
 
-  // Enables the extension identified by |extension_id|.
+  // Enables the extension identified by `extension_id`.
   virtual void EnableExtension(content::BrowserContext* context,
-                               const std::string& extension_id) const = 0;
+                               const ExtensionId& extension_id) const = 0;
 
-  // Disables the extension identified by |extension_id|. |source_extension| (if
+  // Disables the extension identified by `extension_id`. `source_extension` (if
   // specified) is the extension that originated the request.
   virtual void DisableExtension(
       content::BrowserContext* context,
       const Extension* source_extension,
-      const std::string& extension_id,
+      const ExtensionId& extension_id,
       disable_reason::DisableReason disable_reason) const = 0;
 
-  // Used to show a confirmation dialog when uninstalling |target_extension|.
+  // Used to show a confirmation dialog when uninstalling `target_extension`.
   virtual std::unique_ptr<UninstallDialogDelegate> UninstallFunctionDelegate(
       ManagementUninstallFunctionBase* function,
       const Extension* target_extension,
@@ -123,10 +118,10 @@ class ManagementAPIDelegate {
 
   // Forwards the call to launch_util::SetLaunchType in chrome.
   virtual void SetLaunchType(content::BrowserContext* context,
-                             const std::string& extension_id,
+                             const ExtensionId& extension_id,
                              LaunchType launch_type) const = 0;
 
-  // Creates a bookmark app for |launch_url|.
+  // Creates a bookmark app for `launch_url`.
   virtual std::unique_ptr<AppForLinkDelegate>
   GenerateAppForLinkFunctionDelegate(
       ManagementGenerateAppForLinkFunction* function,
@@ -138,36 +133,30 @@ class ManagementAPIDelegate {
   virtual bool CanContextInstallWebApps(
       content::BrowserContext* context) const = 0;
 
-  // Installs a web app for |web_app_url| or launches if already installed.
+  // Installs a web app for `web_app_url` or launches if already installed.
   virtual void InstallOrLaunchReplacementWebApp(
       content::BrowserContext* context,
       const GURL& web_app_url,
       InstallOrLaunchWebAppCallback callback) const = 0;
 
-  // Returns whether arc apps can be installed in the given |context|.
-  virtual bool CanContextInstallAndroidApps(
-      content::BrowserContext* context) const = 0;
-
-  // Checks the installation status of |package_name|.
-  virtual void CheckAndroidAppInstallStatus(
-      const std::string& package_name,
-      AndroidAppInstallStatusCallback callback) const = 0;
-
-  // Installs an Arc app for |package_name|.
-  virtual void InstallReplacementAndroidApp(
-      const std::string& package_name,
-      InstallAndroidAppCallback callback) const = 0;
-
   // Forwards the call to ExtensionIconSource::GetIconURL in chrome.
   virtual GURL GetIconURL(const Extension* extension,
                           int icon_size,
-                          ExtensionIconSet::MatchType match,
+                          ExtensionIconSet::Match match,
                           bool grayscale) const = 0;
 
   // Returns effective update URL from ExtensionManagement.
   virtual GURL GetEffectiveUpdateURL(
       const Extension& extension,
       content::BrowserContext* context) const = 0;
+
+  // Displays the re-enable dialog when `extension` was disabled due to the MV2
+  // deprecation. Calls `done_callback` when accepted/cancelled.
+  virtual void ShowMv2DeprecationReEnableDialog(
+      content::BrowserContext* context,
+      content::WebContents* web_contents,
+      const Extension& extension,
+      base::OnceCallback<void(bool)> done_callback) const = 0;
 };
 
 }  // namespace extensions

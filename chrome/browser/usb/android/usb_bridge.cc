@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/usb/android/jni_headers/UsbBridge_jni.h"
 #include "content/public/browser/web_contents.h"
 
-jboolean JNI_UsbBridge_IsWebContentsConnectedToUsbDevice(
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/usb/android/jni_headers/UsbBridge_jni.h"
+
+static bool JNI_UsbBridge_IsWebContentsConnectedToUsbDevice(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& java_web_contents) {
+    const base::android::JavaRef<jobject>& java_web_contents) {
   return content::WebContents::FromJavaWebContents(java_web_contents)
-      ->IsConnectedToUsbDevice();
+      ->IsCapabilityActive(content::WebContentsCapabilityType::kUSB);
 }
+
+DEFINE_JNI(UsbBridge)

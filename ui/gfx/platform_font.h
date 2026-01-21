@@ -5,21 +5,23 @@
 #ifndef UI_GFX_PLATFORM_FONT_H_
 #define UI_GFX_PLATFORM_FONT_H_
 
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "base/component_export.h"
 #include "base/memory/ref_counted.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/font_render_params.h"
-#include "ui/gfx/gfx_export.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace gfx {
 
-class GFX_EXPORT PlatformFont : public base::RefCounted<PlatformFont> {
+class COMPONENT_EXPORT(GFX) PlatformFont
+    : public base::RefCounted<PlatformFont> {
  public:
 // The size of the font returned by CreateDefault() on a "default" platform
 // configuration. This allows UI that wants to target a particular size of font
@@ -31,10 +33,21 @@ class GFX_EXPORT PlatformFont : public base::RefCounted<PlatformFont> {
   static constexpr int kDefaultBaseFontSize = 12;
 #endif
 
+  // Takes a desired font size and returns the size delta to request from
+  // ui::ResourceBundle that will result in font size plus any font size changes
+  // made to account for locale or user settings.
+  static constexpr int GetFontSizeDelta(int desired_font_size);
+
+  // Takes a desired font size and returns the size delta to request from
+  // ui::ResourceBundle that will result in exactly that font size, canceling
+  // out any font size changes made to account for locale or user settings.
+  static int GetFontSizeDeltaIgnoringUserOrLocaleSettings(
+      int desired_font_size);
+
   // Creates an appropriate PlatformFont implementation.
   static PlatformFont* CreateDefault();
 #if BUILDFLAG(IS_APPLE)
-  static PlatformFont* CreateFromNativeFont(NativeFont native_font);
+  static PlatformFont* CreateFromCTFont(CTFontRef ct_font);
 #endif
   // Creates a PlatformFont implementation with the specified |font_name|
   // (encoded in UTF-8) and |font_size| in pixels.
@@ -49,7 +62,7 @@ class GFX_EXPORT PlatformFont : public base::RefCounted<PlatformFont> {
   static PlatformFont* CreateFromSkTypeface(
       sk_sp<SkTypeface> typeface,
       int font_size,
-      const absl::optional<FontRenderParams>& params);
+      const std::optional<FontRenderParams>& params);
 
   // Returns a new Font derived from the existing font.
   // |size_delta| is the size in pixels to add to the current font.
@@ -88,7 +101,14 @@ class GFX_EXPORT PlatformFont : public base::RefCounted<PlatformFont> {
   virtual const std::string& GetFontName() const = 0;
 
   // Returns the actually used font name in UTF-8.
+  // This string is for logging or display only. Requesting a font with this
+  // name may return a different font.
+  // In tests prefer GetActualFontNames. The common names used in the tests may
+  // not be the primary actual name of the resolved font.
   virtual std::string GetActualFontName() const = 0;
+
+  // Returns the actually used font names in UTF-8.
+  virtual std::vector<std::string> GetActualFontNames() const = 0;
 
   // Returns the font size in pixels.
   virtual int GetFontSize() const = 0;
@@ -97,21 +117,32 @@ class GFX_EXPORT PlatformFont : public base::RefCounted<PlatformFont> {
   virtual const FontRenderParams& GetFontRenderParams() = 0;
 
 #if BUILDFLAG(IS_APPLE)
-  // Returns the native font handle.
-  virtual NativeFont GetNativeFont() const = 0;
+  // Returns the underlying CTFontRef.
+  virtual CTFontRef GetCTFont() const = 0;
 #endif
 
   // Returns the underlying Skia typeface. Used in RenderTextHarfBuzz for having
-  // access to the exact Skia typeface returned by  font fallback, as we would
+  // access to the exact Skia typeface returned by font fallback, as we would
   // otherwise lose the handle to the correct platform font instance.
   virtual sk_sp<SkTypeface> GetNativeSkTypeface() const = 0;
 
+  std::strong_ordering operator<=>(const PlatformFont& other) const {
+    return Compare(other);
+  }
+
  protected:
-  virtual ~PlatformFont() {}
+  virtual ~PlatformFont() = default;
+
+  // Compares this PlatformFont with |other|.
+  virtual std::strong_ordering Compare(const PlatformFont& other) const;
 
  private:
   friend class base::RefCounted<PlatformFont>;
 };
+
+constexpr int PlatformFont::GetFontSizeDelta(int desired_font_size) {
+  return desired_font_size - kDefaultBaseFontSize;
+}
 
 }  // namespace gfx
 

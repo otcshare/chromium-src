@@ -6,11 +6,12 @@
 
 #include <string>
 
-#include "base/bind.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/timer/elapsed_timer.h"
 #include "chrome/browser/profiles/profile.h"
@@ -41,28 +42,29 @@
 #include "url/gurl.h"
 
 using testing::_;
-using testing::Invoke;
 
 namespace {
 
 constexpr char kPresentationId[] = "test_id";
-const base::FilePath::StringPieceType kResourcePath =
+const base::FilePath::StringViewType kResourcePath =
     FILE_PATH_LITERAL("media/router/");
 
 base::RepeatingCallback<void(const std::string&)> GetNoopTitleChangeCallback() {
   return base::BindRepeating([](const std::string& title) {});
 }
 
-base::FilePath GetResourceFile(base::FilePath::StringPieceType relative_path) {
+base::FilePath GetResourceFile(base::FilePath::StringViewType relative_path) {
   base::FilePath base_dir;
-  if (!base::PathService::Get(chrome::DIR_TEST_DATA, &base_dir))
+  if (!base::PathService::Get(chrome::DIR_TEST_DATA, &base_dir)) {
     return base::FilePath();
+  }
   base::FilePath full_path =
       base_dir.Append(kResourcePath).Append(relative_path);
   {
     base::ScopedAllowBlockingForTesting scoped_allow_blocking;
-    if (!PathExists(full_path))
+    if (!PathExists(full_path)) {
       return base::FilePath();
+    }
   }
   return full_path;
 }
@@ -74,7 +76,7 @@ base::FilePath GetResourceFile(base::FilePath::StringPieceType relative_path) {
 class FakeControllerConnection final
     : public blink::mojom::PresentationConnection {
  public:
-  FakeControllerConnection() {}
+  FakeControllerConnection() = default;
 
   FakeControllerConnection(const FakeControllerConnection&) = delete;
   FakeControllerConnection& operator=(const FakeControllerConnection&) = delete;
@@ -86,8 +88,9 @@ class FakeControllerConnection final
   }
 
   // blink::mojom::PresentationConnection implementation
-  MOCK_METHOD1(OnMessage,
-               void(blink::mojom::PresentationConnectionMessagePtr message));
+  MOCK_METHOD(void,
+              OnMessage,
+              (blink::mojom::PresentationConnectionMessagePtr message));
   void DidChangeState(
       blink::mojom::PresentationConnectionState state) override {}
   void DidClose(
@@ -175,9 +178,8 @@ IN_PROC_BROWSER_TEST_F(PresentationReceiverWindowControllerBrowserTest,
                          base::Unretained(&destroyer)),
           GetNoopTitleChangeCallback());
   receiver_window->Start(kPresentationId, GURL("about:blank"));
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_TRUE(IsWindowFullscreen(*receiver_window));
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return IsWindowFullscreen(*receiver_window); }));
 
   destroyer.AwaitTerminate(std::move(receiver_window));
 }
@@ -185,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(PresentationReceiverWindowControllerBrowserTest,
 IN_PROC_BROWSER_TEST_F(PresentationReceiverWindowControllerBrowserTest,
                        MANUAL_CreatesWindowOnGivenDisplay) {
   // Pick specific display.
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   const auto& displays = screen->GetAllDisplays();
   for (const auto& display : displays) {
     DVLOG(0) << display.ToString();
@@ -248,8 +250,8 @@ IN_PROC_BROWSER_TEST_F(PresentationReceiverWindowControllerBrowserTest,
 
   content::WebContentsDestroyedWatcher destroyed_watcher(
       receiver_window->web_contents());
-  ASSERT_TRUE(content::ExecuteScript(receiver_window->web_contents(),
-                                     "window.location = 'about:blank'"));
+  ASSERT_TRUE(content::ExecJs(receiver_window->web_contents(),
+                              "window.location = 'about:blank'"));
   destroyed_watcher.Wait();
 
   destroyer.AwaitTerminate(std::move(receiver_window));

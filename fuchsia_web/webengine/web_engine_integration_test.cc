@@ -8,7 +8,9 @@
 #include <zircon/rights.h>
 #include <zircon/types.h>
 
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/mem_buffer_util.h"
@@ -20,6 +22,7 @@
 #include "fuchsia_web/common/test/fit_adapter.h"
 #include "fuchsia_web/common/test/frame_test_util.h"
 #include "fuchsia_web/common/test/test_devtools_list_fetcher.h"
+#include "fuchsia_web/webengine/test/context_provider_for_test.h"
 #include "fuchsia_web/webengine/web_engine_integration_test_base.h"
 #include "media/base/media_switches.h"
 #include "media/fuchsia/audio/fake_audio_consumer.h"
@@ -27,13 +30,6 @@
 #include "media/fuchsia/camera/fake_fuchsia_camera.h"
 #include "net/http/http_request_headers.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-#if defined(USE_CFV1_LAUNCHER)
-#include "fuchsia_web/webengine/test/context_provider_for_test_v1.h"  // nogncheck
-#else
-#include "fuchsia_web/webengine/test/context_provider_for_test_v2.h"  // nogncheck
-#endif
 
 namespace {
 
@@ -58,11 +54,17 @@ class WebEngineIntegrationTest : public WebEngineIntegrationTestBase {
  protected:
   WebEngineIntegrationTest() = default;
 
+  ~WebEngineIntegrationTest() override {
+    // We're about to shut down the realm; unbind to unhook the error handler.
+    frame_.Unbind();
+    context_.Unbind();
+  }
+
   void StartWebEngine(base::CommandLine command_line) override {
     context_provider_.emplace(
         ContextProviderForTest::Create(std::move(command_line)));
     context_provider_->ptr().set_error_handler(
-        [](zx_status_t status) { ADD_FAILURE(); });
+        [](zx_status_t status) { FAIL() << zx_status_get_string(status); });
   }
 
   fuchsia::web::ContextProvider* GetContextProvider() override {
@@ -72,7 +74,7 @@ class WebEngineIntegrationTest : public WebEngineIntegrationTestBase {
   void RunPermissionTest(bool grant);
 
  private:
-  absl::optional<ContextProviderForTest> context_provider_;
+  std::optional<ContextProviderForTest> context_provider_;
 };
 
 class WebEngineIntegrationUserAgentTest : public WebEngineIntegrationTest {
@@ -97,8 +99,7 @@ class WebEngineIntegrationUserAgentTest : public WebEngineIntegrationTest {
                            version_info::GetMajorVersionNumberAsInt());
 
     // Ensure the field was actually populated.
-    EXPECT_NE(expected_ua.find(version_info::GetMajorVersionNumber()),
-              std::string::npos);
+    EXPECT_TRUE(expected_ua.contains(version_info::GetMajorVersionNumber()));
 
     return expected_ua;
   }
@@ -145,12 +146,12 @@ TEST_F(WebEngineIntegrationUserAgentTest, ValidProductOnly) {
   // the product tag.
   std::string result =
       ExecuteJavaScriptWithStringResult("document.body.innerText;");
-  EXPECT_TRUE(result.find(kValidUserAgentProduct) != std::string::npos);
+  EXPECT_TRUE(result.contains(kValidUserAgentProduct));
   EXPECT_EQ(result, expected);
 
   // Query & verify that the navigator.userAgent contains the product tag.
   result = ExecuteJavaScriptWithStringResult("navigator.userAgent;");
-  EXPECT_TRUE(result.find(kValidUserAgentProduct) != std::string::npos);
+  EXPECT_TRUE(result.contains(kValidUserAgentProduct));
   EXPECT_EQ(result, expected);
 }
 
@@ -170,14 +171,12 @@ TEST_F(WebEngineIntegrationUserAgentTest, ValidProductAndVersion) {
   // both product & version.
   std::string result =
       ExecuteJavaScriptWithStringResult("document.body.innerText;");
-  EXPECT_TRUE(result.find(kValidUserAgentProductAndVersion) !=
-              std::string::npos);
+  EXPECT_TRUE(result.contains(kValidUserAgentProductAndVersion));
   EXPECT_EQ(result, expected);
 
   // Query & verify that the navigator.userAgent contains product & version.
   result = ExecuteJavaScriptWithStringResult("navigator.userAgent;");
-  EXPECT_TRUE(result.find(kValidUserAgentProductAndVersion) !=
-              std::string::npos);
+  EXPECT_TRUE(result.contains(kValidUserAgentProductAndVersion));
   EXPECT_EQ(result, expected);
 
   // Verify navigator.platform is empty, see crbug.com/1348646.
@@ -277,22 +276,27 @@ TEST_F(WebEngineIntegrationTest, RemoteDebuggingPort) {
       GetDevToolsListFromPort(remote_debugging_port);
   EXPECT_EQ(devtools_list.size(), 1u);
 
-  base::Value* devtools_url = devtools_list[0].FindPath("url");
-  ASSERT_TRUE(devtools_url->is_string());
-  EXPECT_EQ(devtools_url->GetString(), url);
+  {
+    const auto* devtools_url = devtools_list[0].GetDict().FindString("url");
+    ASSERT_TRUE(devtools_url);
+    EXPECT_EQ(*devtools_url, url);
+  }
 
   // Create a second frame, without remote debugging enabled. The remote
   // debugging service should still report a single Frame is present.
   fuchsia::web::FramePtr web_frame2;
-  web_frame2.set_error_handler([](zx_status_t) { ADD_FAILURE(); });
+  web_frame2.set_error_handler(
+      [](zx_status_t status) { FAIL() << zx_status_get_string(status); });
   context()->CreateFrame(web_frame2.NewRequest());
 
   devtools_list = GetDevToolsListFromPort(remote_debugging_port);
   EXPECT_EQ(devtools_list.size(), 1u);
 
-  devtools_url = devtools_list[0].FindPath("url");
-  ASSERT_TRUE(devtools_url->is_string());
-  EXPECT_EQ(devtools_url->GetString(), url);
+  {
+    const auto* devtools_url = devtools_list[0].GetDict().FindString("url");
+    ASSERT_TRUE(devtools_url);
+    EXPECT_EQ(*devtools_url, url);
+  }
 
   // Tear down the debuggable Frame. The remote debugging service should have
   // shut down.
@@ -342,6 +346,69 @@ TEST_F(WebEngineIntegrationTest, ContentDirectoryProvider) {
   navigation_listener()->RunUntilUrlAndTitleEquals(kUrl, kTitle);
 }
 
+class WebEngineIntegrationReduceAcceptLanguageTest
+    : public WebEngineIntegrationTest {
+ protected:
+  GURL GetEchoAcceptLanguageUrl() {
+    static std::string echo_accept_language_header_path =
+        std::string("/echoheader?") + net::HttpRequestHeaders::kAcceptLanguage;
+    return embedded_test_server_.GetURL(echo_accept_language_header_path);
+  }
+  std::vector<std::string> GetNavigatorLanguages() {
+    std::optional<base::Value> value =
+        ExecuteJavaScript(frame_.get(), "navigator.languages;");
+    std::vector<std::string> accept_languages;
+    if (!value) {
+      return accept_languages;
+    }
+    for (const auto& language : value->GetList()) {
+      accept_languages.push_back(language.GetString());
+    }
+    return accept_languages;
+  }
+};
+
+TEST_F(WebEngineIntegrationReduceAcceptLanguageTest,
+       DisableReduceAcceptLanguage) {
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  command_line.AppendSwitchASCII("disable-features", "ReduceAcceptLanguage");
+  StartWebEngine(std::move(command_line));
+
+  // Create a Context with no values specified.
+  fuchsia::web::CreateContextParams create_params = TestContextParams();
+  CreateContextAndFrameAndLoadUrl(std::move(create_params),
+                                  GetEchoAcceptLanguageUrl());
+
+  // Query & verify that the header echoed into the document body is as
+  // expected.
+  std::string result =
+      ExecuteJavaScriptWithStringResult("document.body.innerText;");
+  EXPECT_EQ(result, "en-US,en;q=0.9");
+
+  // Query & verify that the navigator.languages is as expected.
+  EXPECT_THAT(GetNavigatorLanguages(), testing::ElementsAre("en-US"));
+}
+
+TEST_F(WebEngineIntegrationReduceAcceptLanguageTest, ReduceAcceptLanguage) {
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  command_line.AppendSwitchASCII("enable-features", "ReduceAcceptLanguage");
+  StartWebEngine(std::move(command_line));
+
+  // Create a Context with no values specified.
+  fuchsia::web::CreateContextParams create_params = TestContextParams();
+  CreateContextAndFrameAndLoadUrl(std::move(create_params),
+                                  GetEchoAcceptLanguageUrl());
+
+  // Query & verify that the header echoed into the document body is as
+  // expected.
+  std::string result =
+      ExecuteJavaScriptWithStringResult("document.body.innerText;");
+  EXPECT_EQ(result, "en-US,en;q=0.9");
+
+  // Query & verify that the navigator.languages is as expected.
+  EXPECT_THAT(GetNavigatorLanguages(), testing::ElementsAre("en-US"));
+}
+
 class FakeAudioRenderer
     : public fuchsia::media::testing::AudioRenderer_TestBase {
  public:
@@ -356,7 +423,7 @@ class FakeAudioRenderer
     binding_.AddBinding(this, std::move(request));
   }
 
-  const absl::optional<fuchsia::media::AudioRenderUsage>& usage() const {
+  const std::optional<fuchsia::media::AudioRenderUsage>& usage() const {
     return usage_;
   }
 
@@ -371,7 +438,7 @@ class FakeAudioRenderer
  private:
   fidl::BindingSet<fuchsia::media::AudioRenderer> binding_;
   base::OnceClosure on_set_usage_callback_;
-  absl::optional<fuchsia::media::AudioRenderUsage> usage_;
+  std::optional<fuchsia::media::AudioRenderUsage> usage_;
 };
 
 class FakeAudio : public fuchsia::media::testing::Audio_TestBase {
@@ -443,9 +510,8 @@ class WebEngineIntegrationMediaTest : public WebEngineIntegrationTest {
   }
 
   media::FakeAudioConsumerService fake_audio_consumer_service_;
-  absl::optional<media::FakeAudioDeviceEnumerator>
-      fake_audio_device_enumerator_;
-  absl::optional<FakeAudio> fake_audio_;
+  std::optional<media::FakeAudioDeviceEnumerator> fake_audio_device_enumerator_;
+  std::optional<FakeAudio> fake_audio_;
 
   size_t num_audio_connections_ = 0;
 };
@@ -509,8 +575,28 @@ TEST_F(WebEngineIntegrationMediaTest, PlayAudioToAudioConsumer) {
   ASSERT_EQ(fake_audio_consumer_service_.num_instances(), 1U);
 
   auto pos = fake_audio_consumer_service_.instance(0)->GetMediaPosition();
-  EXPECT_GT(pos, base::Seconds(2.0));
-  EXPECT_LT(pos, base::Seconds(2.5));
+  // TODO(crbug.com/432628104): Tests the media position against the wall time
+  // is less reliable. Looking for a better solution.
+  // Total time of two videos playing back to back is roughly 2.821s,
+  // FakeAudioConsumerService sets 100-500 ms of buffering time. But the buffer
+  // time controls when the renderer starts sending extra data, not the length
+  // of the buffer. So the length of the buffer is always slightly larger than
+  // 100ms to 500ms, roughly 100ms + length of the data being sent from the
+  // renderer (call it chunk length later) to 500ms + chunk length. And the
+  // GetMediaPosition() when EOS is emitted should be between 2.321s - chunk
+  // length to 2.721s - chunk length. Since GetMediaPosition uses wall time and
+  // it needs extra time to process, so also loosen the upper limit to 2.8s.
+  EXPECT_GT(pos, base::Seconds(2.2));
+  #if defined(ARCH_CPU_ARM64)
+  // The arm64 machines we are running are extremely low performant, reducing
+  // the expectation to 10s to reduce flakiness. The test shouldn't rely on the
+  // speed of the emulator/test bot.
+  // See the test history,
+  // https://ci.chromium.org/ui/test/chrome/ninja%3A%2F%2Ffuchsia_web%2Fwebengine%3Aweb_engine_integration_tests%2FWebEngineIntegrationMediaTest.PlayAudioToAudioConsumer
+  EXPECT_LT(pos, base::Seconds(10.0));
+  #else
+  EXPECT_LT(pos, base::Seconds(2.8));
+  #endif
 
   EXPECT_EQ(fake_audio_consumer_service_.instance(0)->session_id(),
             kTestMediaSessionId);
@@ -576,7 +662,7 @@ TEST_F(WebEngineIntegrationTest, PermissionGranted) {
   RunPermissionTest(true);
 }
 
-// TODO(crbug.com/1299352): Flaky.
+// TODO(crbug.com/40823475): Flaky.
 TEST_F(WebEngineIntegrationMediaTest,
        DISABLED_MicrophoneAccess_WithPermission) {
   StartWebEngine(base::CommandLine(base::CommandLine::NO_PROGRAM));
@@ -669,7 +755,7 @@ TEST_F(WebEngineIntegrationTest, WebGLContextAbsentWithoutVulkanFeature) {
 }
 
 #if defined(ARCH_CPU_ARM_FAMILY)
-// TODO(crbug.com/1377994): Enable on ARM64 when bots support Vulkan.
+// TODO(crbug.com/42050537): Enable on ARM64 when bots support Vulkan.
 #define MAYBE_VulkanWebEngineIntegrationTest \
   DISABLED_VulkanWebEngineIntegrationTest
 #else

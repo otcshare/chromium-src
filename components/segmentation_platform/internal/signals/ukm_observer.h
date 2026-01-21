@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "components/ukm/ukm_recorder_observer.h"
 
@@ -49,6 +50,11 @@ class UkmObserver : public ukm::UkmRecorderObserver {
                          const std::vector<GURL>& urls) override;
   void OnUkmAllowedStateChanged(ukm::UkmConsentState state) override;
 
+  // Called to initialize UKM state when the observer is created, in case it
+  // missed notifications prior to set up. `is_msbb_enabled` should indicate if
+  // ukm::MSBB was consented.
+  void InitalizeUkmAllowedState(bool is_msbb_enabled);
+
   void set_ukm_data_manager(UkmDataManagerImpl* ukm_data_manager) {
     ukm_data_manager_ = ukm_data_manager;
   }
@@ -59,7 +65,7 @@ class UkmObserver : public ukm::UkmRecorderObserver {
  private:
   // UkmDataManagerImpl destroys this observer before the UKM service is
   // destroyed.
-  raw_ptr<ukm::UkmRecorderImpl> const ukm_recorder_;
+  raw_ptr<ukm::UkmRecorderImpl, LeakedDanglingUntriaged> const ukm_recorder_;
 
   // Currently observed config.
   std::unique_ptr<UkmConfig> config_;

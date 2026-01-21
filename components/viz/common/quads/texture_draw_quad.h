@@ -5,24 +5,34 @@
 #ifndef COMPONENTS_VIZ_COMMON_QUADS_TEXTURE_DRAW_QUAD_H_
 #define COMPONENTS_VIZ_COMMON_QUADS_TEXTURE_DRAW_QUAD_H_
 
+#include <array>
+#include <optional>
+
+#include "base/values.h"
+#include "cc/paint/paint_flags.h"
 #include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/viz_common_export.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/video_types.h"
 
+namespace mojo {
+template <typename DataViewType, typename T>
+struct StructTraits;
+}
+
 namespace viz {
+namespace mojom {
+class TextureQuadStateDataView;
+}
 
 // The priority for a quads to require being promoted to overlay.
 enum class OverlayPriority { kLow, kRegular, kRequired };
 
 class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
  public:
-  static const size_t kResourceIdIndex = 0;
+  static constexpr Material kMaterial = Material::kTextureContent;
 
   TextureDrawQuad();
   TextureDrawQuad(const TextureDrawQuad& other);
@@ -34,39 +44,65 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
               const gfx::Rect& visible_rect,
               bool needs_blending,
               ResourceId resource_id,
-              bool premultiplied,
               const gfx::PointF& top_left,
               const gfx::PointF& bottom_right,
               SkColor4f background,
-              const float opacity[4],
-              bool flipped,
               bool nearest,
               bool secure_output,
-              gfx::ProtectedVideoType video_type);
+              gfx::ProtectedVideoType video_type,
+              bool is_tex_coords_normalized = true);
 
   void SetAll(const SharedQuadState* shared_quad_state,
               const gfx::Rect& rect,
               const gfx::Rect& visible_rect,
               bool needs_blending,
               ResourceId resource_id,
-              gfx::Size resource_size_in_pixels,
-              bool premultiplied,
               const gfx::PointF& top_left,
               const gfx::PointF& bottom_right,
               SkColor4f background,
-              const float opacity[4],
-              bool flipped,
               bool nearest,
               bool secure_output,
-              gfx::ProtectedVideoType video_type);
+              gfx::ProtectedVideoType video_type,
+              bool is_tex_coords_normalized = true);
 
-  gfx::PointF uv_top_left;
-  gfx::PointF uv_bottom_right;
+  // Returns the texture coordinates in the range [0, 1].
+  gfx::RectF GetNormalizedTexCoords(const gfx::Size& resource_size) const {
+    if (is_normalized_coords) {
+      return tex_coord_rect_;
+    }
+
+    if (resource_size.IsEmpty()) {
+      return gfx::RectF();
+    }
+
+    return gfx::ScaleRect(tex_coord_rect_, 1.0f / resource_size.width(),
+                          1.0f / resource_size.height());
+  }
+
+  // Returns the texture coordinates in the range [0, resource_size].
+  gfx::RectF GetUnnormalizedTexCoords(const gfx::Size& resource_size) const {
+    if (is_normalized_coords) {
+      return gfx::ScaleRect(tex_coord_rect_,
+                            static_cast<float>(resource_size.width()),
+                            static_cast<float>(resource_size.height()));
+    }
+    return tex_coord_rect_;
+  }
+
+  // Sets the texture coordinates in the range [0, 1].
+  void SetNormalizedTexCoordsForTesting(const gfx::RectF& normalized_rect,
+                                        const gfx::Size& resource_size) {
+    // TODO(crbug.com/451876192): This parameter is unused because the internal
+    // storage is currently normalized. It is included to establish the API
+    // for the future CL where we will need to scale the input `normalized_rect`
+    // by `resource_size` to store it as unnormalized coordinates.
+    tex_coord_rect_ = normalized_rect;
+    is_normalized_coords = true;
+  }
+
   SkColor4f background_color = SkColors::kTransparent;
-  float vertex_opacity[4] = {0, 0, 0, 0};
-  bool y_flipped : 1;
+  cc::PaintFlags::DynamicRangeLimitMixture dynamic_range_limit;
   bool nearest_neighbor : 1;
-  bool premultiplied_alpha : 1;
 
   // True if the quad must only be GPU composited if shown on secure outputs.
   bool secure_output_only : 1;
@@ -75,12 +111,9 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   // of canvas or webgl content.
   bool is_video_frame : 1;
 
-  // True if this quad is a stream video texture. This mostly affects overlay
-  // creation (e.g. color space, protection type).
-  bool is_stream_video : 1;
-
-  gfx::HDRMode hdr_mode = gfx::HDRMode::kDefault;
-  absl::optional<gfx::HDRMetadata> hdr_metadata;
+  // If true we will treat the alpha in the texture as 1. This works like rgbx
+  // and not like blend mode 'kSrc' which would copy the alpha.
+  bool force_rgbx : 1 = false;
 
   // kClear if the contents do not require any special protection. See enum of a
   // list of protected content types. Protected contents cannot be displayed via
@@ -91,26 +124,67 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   OverlayPriority overlay_priority_hint = OverlayPriority::kRegular;
 
   // This optional damage is in target render pass coordinate space.
-  absl::optional<gfx::Rect> damage_rect;
+  std::optional<gfx::Rect> damage_rect;
 
-  struct OverlayResources {
-    OverlayResources();
+  struct VIZ_COMMON_EXPORT RoundedDisplayMasksInfo {
+    static constexpr size_t kMaxRoundedDisplayMasksCount = 2;
+    static constexpr size_t kOriginRoundedDisplayMaskIndex = 0;
+    static constexpr size_t kOtherRoundedDisplayMaskIndex = 1;
 
-    gfx::Size size_in_pixels;
+    static RoundedDisplayMasksInfo CreateRoundedDisplayMasksInfo(
+        int origin_rounded_display_mask_radius,
+        int other_rounded_display_mask_radius,
+        bool is_horizontally_positioned = true);
+
+    // Returns the bounds of rounded display masks in target space that are
+    // associated with the `quad`.
+    static std::array<gfx::RectF, kMaxRoundedDisplayMasksCount>
+    GetRoundedDisplayMasksBounds(const DrawQuad* quad);
+
+    RoundedDisplayMasksInfo();
+
+    bool IsEmpty() const;
+
+    bool is_horizontally_positioned = true;
+
+    // Radii of display's rounded corners masks in pixels.
+    std::array<uint8_t, kMaxRoundedDisplayMasksCount> radii = {0, 0};
   };
-  OverlayResources overlay_resources;
 
-  ResourceId resource_id() const { return resources.ids[kResourceIdIndex]; }
-  const gfx::Size& resource_size_in_pixels() const {
-    return overlay_resources.size_in_pixels;
-  }
-  void set_resource_size_in_pixels(const gfx::Size& size_in_pixels) {
-    overlay_resources.size_in_pixels = size_in_pixels;
+  // Encodes the radii(in pixels) and position of rounded-display mask textures
+  // in target space.
+  //
+  // Radius at index `kOriginRoundedDisplayMaskIndex` is always drawn at origin,
+  // whereas radius at index `kOtherRoundedDisplayMaskIndex` is drawn either at
+  // the upper right corner or lower left corner based on
+  // `is_horizontally_positioned`.
+  //
+  // For example: If the resource in target space has dimensions of (10, 10,
+  // 100, 50) and both radii has value of 15, the masks are drawn at bounds (10,
+  // 10, 15, 15) and (95, 10, 15, 15) if `is_horizontally_positioned` is true
+  // otherwise the masks are drawn at bounds (10, 10, 15, 15) and (10, 45, 15,
+  // 15).
+  RoundedDisplayMasksInfo rounded_display_masks_info;
+
+  void set_force_rgbx(bool force_rgbx_value = true) {
+    force_rgbx = force_rgbx_value;
   }
 
   static const TextureDrawQuad* MaterialCast(const DrawQuad*);
 
  private:
+  // TODO(crbug.com/451876192): Remove friend classes after the refactor
+  // to make TextureDrawQuad use unnormalized coordinates is complete
+  friend struct mojo::StructTraits<mojom::TextureQuadStateDataView, DrawQuad>;
+  friend void TextureDrawQuadToDict(const TextureDrawQuad* draw_quad,
+                                    base::Value::Dict* dict);
+
+  gfx::RectF tex_coord_rect_;
+
+  // Indicates whether the texture coordinates are normalized (in [0, 1] range)
+  // or unnormalized (in [0, resource_size] range).
+  bool is_normalized_coords = true;
+
   void ExtendValue(base::trace_event::TracedValue* value) const override;
 };
 

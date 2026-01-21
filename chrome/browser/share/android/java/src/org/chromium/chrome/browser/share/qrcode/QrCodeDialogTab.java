@@ -6,32 +6,33 @@ package org.chromium.chrome.browser.share.qrcode;
 
 import android.view.View;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.base.WindowAndroid;
 
-/**
- * Common interface for all the tab components in QrCodeDialog.
- */
+/** Common interface for all the tab components in QrCodeDialog. */
+@NullMarked
 public interface QrCodeDialogTab {
-    public View getView();
+    View getView();
 
     /**
-     *  Called when the entire dialog is resumed.
+     * @return whether the tab is currently enabled.
      */
-    public void onResume();
+    default boolean isEnabled() {
+        return true;
+    }
+
+    /** Called when the entire dialog is resumed. */
+    void onResume();
+
+    /** Called when the entire dialog is paused. */
+    void onPause();
 
     /**
-     *  Called when the entire dialog is paused.
+     * Called when the dialog is destroyed. This happens when the user has navigated away from the
+     * dialog.
      */
-    public void onPause();
+    void onDestroy();
 
-    /**
-     *  Called when the dialog is destroyed. This happens when the user has navigated away from the
-     *  dialog.
-     */
-    public void onDestroy();
-
-    /**
-     * Called when the permissions delegate is reset.
-     */
-    public void updatePermissions(WindowAndroid windowAndroid);
+    /** Called when the permissions delegate is reset. */
+    void updatePermissions(WindowAndroid windowAndroid);
 }

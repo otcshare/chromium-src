@@ -4,41 +4,45 @@
 
 package org.chromium.chrome.browser.toolbar;
 
-import org.chromium.base.FeatureList;
+import android.os.Build.VERSION;
+import android.os.Build.VERSION_CODES;
+
+import org.chromium.base.DeviceInfo;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.flags.MutableFlagWithSafeDefault;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 
 /** Utility class for toolbar code interacting with features and params. */
+@NullMarked
 public final class ToolbarFeatures {
-    // The ablation experiment turns off toolbar scrolling off the screen. Initially this also
-    // turned off captures, which are unnecessary when the toolbar cannot scroll off. But this param
-    // allows half of this work to still be done, allowing measurement of both halves when compared
-    // to the original ablation and controls.
-    private static final String ALLOW_CAPTURES = "allow_captures";
-    private static final MutableFlagWithSafeDefault sSuppressionFlag =
-            new MutableFlagWithSafeDefault(ChromeFeatureList.SUPPRESS_TOOLBAR_CAPTURES, false);
-
     /** Private constructor to avoid instantiation. */
     private ToolbarFeatures() {}
 
-    /** Returns whether captures should be blocked as part of the ablation experiment. */
-    public static boolean shouldBlockCapturesForAblation() {
-        // Fall back to allowing captures when pre-native.
-        if (!FeatureList.isNativeInitialized()) {
-            return false;
-        }
-
-        // Not in ablation, captures are allowed like normal.
-        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.TOOLBAR_SCROLL_ABLATION_ANDROID)) {
-            return false;
-        }
-
-        // Ablation is enabled, follow the param.
-        return !ChromeFeatureList.getFieldTrialParamByFeatureAsBoolean(
-                ChromeFeatureList.TOOLBAR_SCROLL_ABLATION_ANDROID, ALLOW_CAPTURES, false);
+    /**
+     * Returns whether to record metrics from suppression experiment. This allows an arm of
+     * suppression to run without the overhead from reporting any extra metrics in Java. Using a
+     * feature instead of a param to utilize Java side caching.
+     */
+    public static boolean shouldRecordSuppressionMetrics() {
+        return ChromeFeatureList.sRecordSuppressionMetrics.isEnabled();
     }
 
-    public static boolean shouldSuppressCaptures() {
-        return sSuppressionFlag.isEnabled();
+    /**
+     * Returns if app header customization is supported. This feature enables rendering the tab
+     * strip in the caption bar when applicable.
+     */
+    public static boolean isAppHeaderCustomizationSupported(
+            boolean isTablet, boolean isDefaultDisplay) {
+        if (DeviceInfo.isAutomotive()) {
+            return false;
+        }
+
+        // Determine if app header customization will be supported on an external display.
+        if (!AppHeaderUtils.shouldAllowHeaderCustomizationOnNonDefaultDisplay()
+                && !isDefaultDisplay) {
+            return false;
+        }
+
+        return isTablet && VERSION.SDK_INT >= VERSION_CODES.R;
     }
 }

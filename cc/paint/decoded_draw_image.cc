@@ -6,15 +6,36 @@
 
 #include <utility>
 
+#include "cc/paint/color_filter.h"
+
 namespace cc {
 
 DecodedDrawImage::DecodedDrawImage(sk_sp<SkImage> image,
-                                   sk_sp<SkColorFilter> dark_mode_color_filter,
+                                   sk_sp<ColorFilter> dark_mode_color_filter,
+                                   const SkSize& src_rect_offset,
+                                   const SkSize& scale_adjustment,
+                                   PaintFlags::FilterQuality filter_quality,
+                                   bool is_budgeted)
+    : DecodedDrawImage(std::move(image),
+                       nullptr,
+                       gfx::HDRMetadata(),
+                       std::move(dark_mode_color_filter),
+                       src_rect_offset,
+                       scale_adjustment,
+                       filter_quality,
+                       is_budgeted) {}
+
+DecodedDrawImage::DecodedDrawImage(sk_sp<SkImage> image,
+                                   sk_sp<SkImage> gainmap_image,
+                                   const gfx::HDRMetadata& hdr_metadata,
+                                   sk_sp<ColorFilter> dark_mode_color_filter,
                                    const SkSize& src_rect_offset,
                                    const SkSize& scale_adjustment,
                                    PaintFlags::FilterQuality filter_quality,
                                    bool is_budgeted)
     : image_(std::move(image)),
+      gainmap_image_(std::move(gainmap_image)),
+      hdr_metadata_(hdr_metadata),
       dark_mode_color_filter_(std::move(dark_mode_color_filter)),
       src_rect_offset_(src_rect_offset),
       scale_adjustment_(scale_adjustment),
@@ -30,8 +51,8 @@ DecodedDrawImage::DecodedDrawImage(const gpu::Mailbox& mailbox,
       is_budgeted_(true) {}
 
 DecodedDrawImage::DecodedDrawImage(
-    absl::optional<uint32_t> transfer_cache_entry_id,
-    sk_sp<SkColorFilter> dark_mode_color_filter,
+    std::optional<uint32_t> transfer_cache_entry_id,
+    sk_sp<ColorFilter> dark_mode_color_filter,
     const SkSize& src_rect_offset,
     const SkSize& scale_adjustment,
     PaintFlags::FilterQuality filter_quality,
